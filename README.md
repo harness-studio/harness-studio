@@ -29,7 +29,7 @@ Requires **Python 3.12**.
 
 ```bash
 # install straight from GitHub (no clone needed)
-uv tool install git+https://github.com/gabrielbioinfo/harness-studio
+uv tool install git+https://github.com/harness-studio/harness-studio
 hssd --help
 ```
 
