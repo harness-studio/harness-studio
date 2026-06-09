@@ -528,60 +528,75 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_ailog(args: argparse.Namespace) -> int:
-    """Render docs/AI_LOG.md (the AI Interaction Log deliverable) from the captured metrics.
+AILOG_HUMAN_TEMPLATE = (
+    "## Interactions\n\n"
+    "> Human-authored. One entry per meaningful prompt YOU issued to an AI tool (Claude Code,\n"
+    "> Cursor, Copilot, ...). At least 3 entries for the final submission. Per-entry shape:\n\n"
+    "### 1. Human — <ISO date>\n\n"
+    "**Prompt:**\n\n```text\n<what you asked>\n```\n\n"
+    "**Output (summary):**\n\n```text\n<what came back — a summary is fine>\n```\n\n"
+    "**Correction / redirect (if any):** <what you fixed, or \"none\">\n\n"
+    "## Corrections & redirections\n\n"
+    "> Human-authored. Must not be empty: list each correction/redirect, plus at least one\n"
+    "> instance where you checked the AI and it was correct (shows active supervision).\n\n"
+    "- <correction or verified-correct instance>\n\n"
+    "## Reflection\n\n"
+    "> Human-authored. 3-5 bullets, each grounded in a concrete artifact (work item ID, endpoint,\n"
+    "> agent role, error class, filename) — no platitudes.\n\n"
+    "- <what the AI was strong at — named instance>\n"
+    "- <where it failed you — named instance>\n"
+    "- <what you double-checked manually>\n"
+)
 
-    Regenerates the Summary + Interactions; preserves any human-written Corrections/Reflection.
-    """
+
+def cmd_ailog(args: argparse.Namespace) -> int:
+    """Render docs/AI_LOG.md. AUTO: Summary + Appendix (harness agent calls) from metrics.jsonl.
+    HUMAN (preserved across re-runs): Interactions, Corrections, Reflection."""
     project = Path(".").resolve()
     rows = _load_metrics(project)
     out = project / "docs" / "AI_LOG.md"
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    human_tail = ""
+    # Preserve the HUMAN middle (Interactions → Corrections → Reflection) across regenerations.
+    human = AILOG_HUMAN_TEMPLATE
     if out.exists():
         old = out.read_text(encoding="utf-8")
-        idx = old.find("## Corrections")
-        if idx != -1:
-            human_tail = old[idx:].rstrip() + "\n"
+        i, j = old.find("## Interactions"), old.find("## Appendix")
+        if i != -1:
+            human = old[i:(j if j != -1 else len(old))].rstrip() + "\n"
 
     t = _totals(rows)
     span = f" (elapsed span {t['span']})" if t["span"] else ""
+    by: dict[str, dict] = {}
+    for r in rows:
+        d = by.setdefault(r.get("role", "?"), {"n": 0, "in": 0, "out": 0, "cost": 0.0})
+        d["n"] += 1
+        d["in"] += r.get("input_tokens") or 0
+        d["out"] += r.get("output_tokens") or 0
+        d["cost"] += r.get("cost_usd") or 0
+
     lines = [
         "# AI Interaction Log", "",
-        "> Auto-drafted by `hssd ailog` from `.harness/logs/metrics.jsonl`. Summary and "
-        "Interactions are generated; fill **Corrections** and **Reflection** by hand. Re-running "
-        "preserves your Corrections/Reflection.", "",
+        "> **Interactions**, **Corrections**, and **Reflection** are human-authored (preserved "
+        "across re-runs). `hssd ailog` regenerates **Summary** and the **Appendix** (harness agent "
+        "calls) from `.harness/logs/metrics.jsonl`.", "",
         "## Summary", "",
-        f"- AI calls: **{t['calls']}**",
+        f"- Harness AI calls: **{t['calls']}**",
         f"- Agent wall time: **{t['wall_s']:.1f}s**{span}",
         f"- Tokens in/out: **{int(t['in']):,} / {int(t['out']):,}** (cache-read {int(t['cache_read']):,})",
         f"- Cost: **${t['cost']:.4f}**", "",
-        "## Interactions", "",
+        human.rstrip(), "",
+        "## Appendix — Harness agent calls (auto from metrics.jsonl)", "",
+        "Harness-internal governance/agent calls — **not** part of the Interactions count above.", "",
+        "| Role | Calls | Tokens in | Tokens out | Cost |",
+        "|---|--:|--:|--:|--:|",
     ]
-    if not rows:
-        lines.append("_(no AI calls recorded yet)_\n")
-    for i, r in enumerate(rows, 1):
-        lines += [
-            f"### {i}. `{r.get('role', '?')}` — {r.get('ts', '')}",
-            f"tokens in/out {r.get('input_tokens', 0)}/{r.get('output_tokens', 0)} · "
-            f"cost ${(r.get('cost_usd') or 0):.4f} · {r.get('duration_s', 0)}s", "",
-            "**Prompt (preview):**", "", "```text", (r.get("prompt_preview", "") or "").strip(), "```", "",
-            "**Output (summary):**", "", "```text", (r.get("result_preview", "") or "").strip(), "```", "",
-        ]
-    if human_tail:
-        lines.append(human_tail)
-    else:
-        lines += [
-            "## Corrections & redirections", "",
-            "- _(where you corrected or redirected the AI)_", "",
-            "## Reflection", "",
-            "- _(what the AI was good at)_",
-            "- _(where it failed you)_",
-            "- _(what you double-checked manually)_", "",
-        ]
+    lines += [f"| `{k}` | {d['n']} | {int(d['in']):,} | {int(d['out']):,} | ${d['cost']:.4f} |"
+              for k, d in sorted(by.items())] or ["| _(none yet)_ | | | | |"]
+    lines.append("")
+
     out.write_text("\n".join(lines), encoding="utf-8")
-    print(f"OK: wrote {out} — {t['calls']} interaction(s). Fill Corrections + Reflection by hand.")
+    print(f"OK: wrote {out}. Summary + Appendix auto; fill Interactions/Corrections/Reflection by hand.")
     return 0
 
 
@@ -739,7 +754,11 @@ def _claude_stream(exe: str, composed: str, role: str):
                     if blk.get("type") == "text" and blk.get("text"):
                         sys.stdout.write(blk["text"]); sys.stdout.flush()
                     elif blk.get("type") == "tool_use":
-                        print(f"\n    → tool: {blk.get('name', '?')}", flush=True)
+                        _inp = blk.get("input") or {}
+                        _hint = next((str(_inp[k])[:90] for k in
+                                      ("file_path", "path", "pattern", "command", "query", "url", "notebook_path")
+                                      if _inp.get(k)), "")
+                        print(f"\n    → {blk.get('name', '?')}{(' ' + _hint) if _hint else ''}", flush=True)
         elif et == "result":
             text = ev.get("result", text)
             usage = ev.get("usage") or {}

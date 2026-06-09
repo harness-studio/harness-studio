@@ -1,22 +1,51 @@
-# AI Interaction Log — <engagement title>
+# AI Interaction Log
 
-> Capture LIVE, don't reconstruct at the end. The most valuable entries are the **corrections** and the **adversaries' findings** — they prove you govern the AI.
+> **Interactions**, **Corrections**, and **Reflection** are human-authored. Run `hssd ailog` to
+> (re)generate the **Summary** and the **Appendix** (harness agent calls) from
+> `.harness/logs/metrics.jsonl`; your human sections are preserved across re-runs. Capture LIVE —
+> don't reconstruct at the end.
 
-## Entries (one per meaningful role invocation)
+## Summary
 
-### [Phase] Role — short objective
-**Prompt (summary):** <what I asked>
-**Output (summary):** <what came back>
-**Correction/redirection:** <what was wrong and how I redirected — or "—">
-**Why it mattered:** <1 line, optional>
+_(auto — run `hssd ailog`)_
 
----
-<!-- repeat the block above for each meaningful interaction -->
----
+## Interactions
 
-## Final reflection (3-5 bullets, required)
-- **The AI was good at:** <e.g., scaffolding, boilerplate, first draft of tests>
-- **The AI failed at:** <e.g., confident but subtly wrong concurrency code; declaring "done" early>
-- **I had to manually check:** <e.g., actually running the stress test; reviewing transaction isolation>
-- **The adversarial process caught:** <what a naive flow would have missed>
-- **(Optional) Where the AI led me down a dead end:** <honesty counts>
+> Human-authored. One entry per meaningful prompt YOU issued to an AI tool (Claude Code, Cursor,
+> Copilot, ...). At least 3 entries for the final submission. Per-entry shape:
+
+### 1. Human — <ISO date>
+
+**Prompt:**
+
+```text
+<what you asked>
+```
+
+**Output (summary):**
+
+```text
+<what came back — a summary is fine>
+```
+
+**Correction / redirect (if any):** <what you fixed, or "none">
+
+## Corrections & redirections
+
+> Human-authored. Must not be empty: list each correction/redirect, plus at least one instance
+> where you checked the AI and it was correct (shows active supervision).
+
+- <correction or verified-correct instance>
+
+## Reflection
+
+> Human-authored. 3-5 bullets, each grounded in a concrete artifact (work item ID, endpoint,
+> agent role, error class, filename) — no platitudes.
+
+- <what the AI was strong at — named instance>
+- <where it failed you — named instance>
+- <what you double-checked manually>
+
+## Appendix — Harness agent calls (auto from metrics.jsonl)
+
+_(auto — run `hssd ailog`)_
