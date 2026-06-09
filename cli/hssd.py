@@ -123,6 +123,11 @@ def _wire_claude(dest: Path) -> tuple[int, int]:
                 c, s = _mirror_if_absent(d, dest / ".claude" / "skills" / d.name)
                 created += c
                 skipped += s
+    commands_root = PKG_ROOT / "commands"
+    if commands_root.exists():  # slash commands so Claude Code drives hssd via /overview, /engage, ...
+        c, s = _mirror_if_absent(commands_root, dest / ".claude" / "commands")
+        created += c
+        skipped += s
     return created, skipped
 
 

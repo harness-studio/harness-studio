@@ -30,6 +30,10 @@ This repository is governed by Harness Studio (it has an `hssd.yaml` and a `.har
 - **Mechanical vs AI commands.** `init`, `work`, `template`, `stats`, `log`, `ailog` are instant and free — run them directly. `overview analyze` and `engage` invoke the AI and **cost tokens** — confirm intent before running.
 - **Templates: known paths, never a wall.** Any git URL works via `--from`; `hssd template add` registers one the user trusts (saved to `~/.hssd/templates.json`, shown in `hssd template list`).
 
+## Slash-command shortcuts
+
+These are wired into `.claude/commands/` — the user can type them, or you can follow them: `/overview [brief]`, `/work [list|claim <id>|add "<title>"]`, `/engage <id>`, `/templates [list|add-blessed]`, `/stats`, `/ailog`. They all map to the `hssd` commands above.
+
 ## Examples
 
 - "register our blessed templates" →
