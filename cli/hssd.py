@@ -90,6 +90,19 @@ Framework: https://github.com/harness-studio/harness-studio
 """
 
 
+HARNESS_GITIGNORE = (
+    "# .harness — COMMIT the auditable state (engagements, decisions/assumptions, the backlog,\n"
+    "# logs that feed the AI Interaction Log & ADR). Ignore only ephemeral / secret / large bits.\n"
+    "cache/\n"
+    "tmp/\n"
+    "*.tmp\n"
+    "*.lock\n"
+    ".env\n"
+    "*.env\n"
+    "secrets*\n"
+)
+
+
 def _mirror_if_absent(src: Path, dst: Path) -> tuple[int, int]:
     """Copy every file under src into dst, create-if-absent (never overwrite). Returns (created, skipped)."""
     created = skipped = 0
@@ -238,7 +251,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     # 5. Local PM spine + runtime dir (gitignored), then git on `main`.
     harness = dest / ".harness"
     harness.mkdir(exist_ok=True)
-    (harness / ".gitignore").write_text("*\n", encoding="utf-8")
+    (harness / ".gitignore").write_text(HARNESS_GITIGNORE, encoding="utf-8")
     _pm(dest).close()  # initialize the local PM spine (work_items table)
     subprocess.run(["git", "init", "-q", "-b", "main", str(dest)], check=False)
 
@@ -265,10 +278,21 @@ def cmd_init(args: argparse.Namespace) -> int:
     created: list[str] = []
     skipped: list[str] = []
 
-    # 1. Runtime spine (.harness + local PM), kept out of git.
+    # 1. Runtime spine (.harness + local PM). We COMMIT the auditable state and ignore only
+    #    ephemeral bits via .harness/.gitignore (the whole dir is NOT git-ignored).
     (dest / ".harness").mkdir(exist_ok=True)
     _pm(dest).close()
-    _union_lines(dest / ".gitignore", ".harness/")
+    hg = dest / ".harness" / ".gitignore"
+    if not hg.exists():
+        hg.write_text(HARNESS_GITIGNORE, encoding="utf-8")
+    # migrate: drop a stale whole-dir ignore from an older init so the state can be committed
+    gi = dest / ".gitignore"
+    if gi.exists():
+        lines = gi.read_text(encoding="utf-8").splitlines()
+        kept = [ln for ln in lines if ln.strip() not in (".harness", ".harness/")]
+        if len(kept) != len(lines):
+            gi.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            print("  migrated: removed stale '.harness/' ignore so engagement state is committed")
 
     # 2. Project config — create-if-absent (never clobber an existing hssd.yaml).
     hy = dest / "hssd.yaml"
@@ -961,6 +985,20 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage answers", f"{args.id} <- {args.answers}")
         print(f"  recorded answers from {args.answers} -> {assumptions_file}")
 
+    # Auto-ingest any answer files the Lead dropped in (no flag needed): clarifications*.md /
+    # answers*.md in the engagement dir, or answers-<id>*.md in the project root.
+    _seen = assumptions_file.read_text(encoding="utf-8") if assumptions_file.exists() else ""
+    for cand in (sorted(st.glob("clarifications*.md")) + sorted(st.glob("answers*.md"))
+                 + sorted(project.glob(f"answers-{args.id.lower()}*.md"))):
+        _txt = cand.read_text(encoding="utf-8").strip()
+        if _txt and _txt[:80] not in _seen:
+            _stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            with assumptions_file.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n## Ingested {cand.name} {_stamp}\n\n{_txt}\n")
+            _seen += _txt
+            _log(project, "engage ingest", f"{args.id} <- {cand.name}")
+            print(f"  auto-ingested answers from {cand.name}")
+
     # Type-aware acceptance: governance/narrative deliverables are accepted by a rubric, code by tests.
     if (lane or "") == "standing":
         accept = (
@@ -1072,27 +1110,44 @@ def cmd_engage(args: argparse.Namespace) -> int:
     if not human("SPEC LOCK (no code before this)"):
         print("Stopped at Spec Lock."); return 0
 
-    # P3 + P4: the goal loop — iterate until the adversarial checkers are dry.
-    checkers = [
-        ("independent-verifier", "Independent Verifier"),
-        ("completion-challenger", "Completion Challenger"),
-        ("test-adversary", "Test Adversary"),
-        ("regression-hunter", "Regression Hunter"),  # always on — integrity is non-negotiable
-    ]
-    # Security is mandatory for API/auth surfaces (STANDARDS §2); --no-security opts out for
-    # non-API work (the documented escape hatch).
-    if not args.no_security:
-        checkers.insert(0, ("security-adversary", "Security/Attack Adversary"))
-    dry = False
-    for attempt in range(1, args.max_iter + 1):
-        print(f"P3 Build (attempt {attempt})"); run("backend-dev"); run("frontend-dev")
-        print("P4 Verification")
-        blockers = [label for role, label in checkers if not gate(role, label)]
-        if not blockers:
-            print("  ✓ loop-until-dry: dry (all checkers PASS)"); dry = True; break
-        print(f"  ↻ blockers {blockers} → back to P3")
-    if not dry:
-        print(f"BLOCK: still failing after {args.max_iter} attempts.", file=sys.stderr); return 1
+    # P3 + P4 are type-aware. Governance/narrative deliverables produce an artifact and are
+    # reviewed against a rubric — no code build, no concurrency/security adversaries.
+    if (lane or "") == "standing":
+        print("P3 Produce (governance deliverable — no code build)")
+        print("  author the artifact: e.g. `hssd ailog` for the AI log, or write docs/ for ADR/README.")
+        print("P4 Rubric review")
+        rubric_checkers = [
+            ("independent-verifier", "Independent Verifier (rubric)"),
+            ("completion-challenger", "Completion Challenger (rubric)"),
+        ]
+        blockers = [label for role, label in rubric_checkers if not gate(role, label)]
+        if blockers:
+            print(f"BLOCK: rubric not satisfied: {blockers} — produce the missing elements, then "
+                  "re-run.", file=sys.stderr)
+            return 1
+        print("  ✓ rubric satisfied")
+    else:
+        # Code deliverable: the goal loop — iterate until the adversarial checkers are dry.
+        checkers = [
+            ("independent-verifier", "Independent Verifier"),
+            ("completion-challenger", "Completion Challenger"),
+            ("test-adversary", "Test Adversary"),
+            ("regression-hunter", "Regression Hunter"),  # always on — integrity is non-negotiable
+        ]
+        # Security is mandatory for API/auth surfaces (STANDARDS §2); --no-security opts out for
+        # non-API work (the documented escape hatch).
+        if not args.no_security:
+            checkers.insert(0, ("security-adversary", "Security/Attack Adversary"))
+        dry = False
+        for attempt in range(1, args.max_iter + 1):
+            print(f"P3 Build (attempt {attempt})"); run("backend-dev"); run("frontend-dev")
+            print("P4 Verification")
+            blockers = [label for role, label in checkers if not gate(role, label)]
+            if not blockers:
+                print("  ✓ loop-until-dry: dry (all checkers PASS)"); dry = True; break
+            print(f"  ↻ blockers {blockers} → back to P3")
+        if not dry:
+            print(f"BLOCK: still failing after {args.max_iter} attempts.", file=sys.stderr); return 1
 
     print("P5 Integration")
     if not human("MERGE"):
