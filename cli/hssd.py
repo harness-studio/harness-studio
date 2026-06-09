@@ -914,7 +914,25 @@ def cmd_engage(args: argparse.Namespace) -> int:
 
     st = project / ".harness" / "engagements" / args.id  # durable memory for this loop
     st.mkdir(parents=True, exist_ok=True)
+    assumptions_file = st / "assumptions.md"  # the Lead's resolutions = the ADR "assumptions"
+
+    # --answers: record the Engagement Lead's resolutions so the agents stop re-raising them and
+    # the decision is captured (we learn from the interaction; it feeds the ADR).
+    if getattr(args, "answers", None):
+        ans = Path(args.answers)
+        if not ans.exists():
+            print(f"BLOCK: answers file not found: {args.answers}", file=sys.stderr)
+            return 1
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with assumptions_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n## Resolution recorded {stamp}\n\n{ans.read_text(encoding='utf-8')}\n")
+        _log(project, "engage answers", f"{args.id} <- {args.answers}")
+        print(f"  recorded answers from {args.answers} -> {assumptions_file}")
+
     ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)"
+    if assumptions_file.exists():
+        ctx += ("\n\n## Resolved assumptions (decided by the Engagement Lead — treat as settled; "
+                "do NOT re-raise these)\n" + assumptions_file.read_text(encoding="utf-8"))
 
     def run(role: str, expect_json: bool = False) -> str:
         out = _run_role(role, ctx, expect_json=expect_json)
@@ -928,6 +946,9 @@ def cmd_engage(args: argparse.Namespace) -> int:
         print(f"  {'✓' if ok else '⏸'} {label} {'PASS' if ok else 'BLOCK'}")
         if not ok:
             print(f"    {out}")
+            print(f"    → resolve & retry: write your answers to a file, then "
+                  f"`hssd engage {args.id} --answers <file>`  "
+                  f"(questions saved in .harness/engagements/{args.id}/{role}.out)")
         return ok
 
     def human(label: str) -> bool:
@@ -1037,6 +1058,9 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--max-iter", type=int, default=3, dest="max_iter")
     pe.add_argument("--no-security", action="store_true", dest="no_security",
                     help="skip the Security/Attack Adversary (non-API/auth work only)")
+    pe.add_argument("--answers", default=None,
+                    help="file with the Lead's resolutions to a blocked gate (recorded as ADR "
+                         "assumptions and reused on re-run, so agents stop re-raising them)")
     pe.set_defaults(func=cmd_engage)
 
     pj = sub.add_parser("janitor", help="discovery heartbeat — audit + dedup + file work items")
