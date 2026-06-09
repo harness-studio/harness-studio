@@ -1172,17 +1172,24 @@ def cmd_engage(args: argparse.Namespace) -> int:
             return False
 
     print(f"▶ engage {args.id} · {title}")
-    print("P0 Intake"); run("product-analyst")
-    if not passing_gate("definition-skeptic", "Definition Skeptic"):
-        return 2
-    print("P1 Stories & AC"); run("story-writer")
-    if not passing_gate("ac-adversary", "AC Adversary"):
-        return 2
-    print("P2 Architecture"); run("architect")
-    if not passing_gate("architecture-adversary", "Architecture Adversary"):
-        return 2
-    if not human("SPEC LOCK (no code before this)"):
-        print("Stopped at Spec Lock."); return 0
+    if (lane or "") == "standing":
+        # Governance/narrative deliverables are produced + rubric-checked, NOT engineered. Skip the
+        # adversarial intake (P0-P2) + Spec Lock entirely — debating a "spec" for an auto-captured
+        # artifact (the AI log is always-on in metrics.jsonl) is wasted cost.
+        print("Standing governance deliverable — skipping adversarial intake (P0-P2 + Spec Lock).")
+        print("  the AI Interaction Log is captured continuously; produce it with `hssd ailog`.")
+    else:
+        print("P0 Intake"); run("product-analyst")
+        if not passing_gate("definition-skeptic", "Definition Skeptic"):
+            return 2
+        print("P1 Stories & AC"); run("story-writer")
+        if not passing_gate("ac-adversary", "AC Adversary"):
+            return 2
+        print("P2 Architecture"); run("architect")
+        if not passing_gate("architecture-adversary", "Architecture Adversary"):
+            return 2
+        if not human("SPEC LOCK (no code before this)"):
+            print("Stopped at Spec Lock."); return 0
 
     # P3 + P4 are type-aware. Governance/narrative deliverables produce an artifact and are
     # reviewed against a rubric — no code build, no concurrency/security adversaries.
