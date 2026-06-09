@@ -1128,8 +1128,29 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage", f"{args.id} config-enabled")
         print(f"✓ {args.id} enabled (config) — status=done")
         return 0
-    if status != "in-progress" and not args.force:
-        print(f"BLOCK: {args.id} is '{status}' — claim it first (hssd work claim {args.id})", file=sys.stderr)
+    if status == "open":
+        # Auto-claim (atomic compare-and-swap) so engage is one step; keeps the branch discipline.
+        branch = f"harness/local-{args.id.lower()}-{_slug(title)}"
+        cur = con.execute(
+            "UPDATE work_items SET status='in-progress', assignee='me', branch=? "
+            "WHERE id=? AND status='open'",
+            (branch, args.id),
+        )
+        con.commit()
+        if cur.rowcount:
+            _log(project, "work claim", f"{args.id} -> {branch} (via engage)")
+            subprocess.run(["git", "checkout", "-q", "-b", branch], check=False)
+            print(f"  claimed {args.id} · branch {branch}")
+        elif not args.force:
+            print(f"BLOCK: {args.id} could not be claimed (taken concurrently?). "
+                  "Use --force to run anyway.", file=sys.stderr)
+            return 1
+    elif status == "done" and not args.force:
+        print(f"BLOCK: {args.id} is already done. Use --force to re-run, or `hssd reset {args.id}`.",
+              file=sys.stderr)
+        return 1
+    elif status != "in-progress" and not args.force:
+        print(f"BLOCK: {args.id} is '{status}'. Use --force to run anyway.", file=sys.stderr)
         return 1
 
     st = project / ".harness" / "engagements" / args.id  # durable memory for this loop
