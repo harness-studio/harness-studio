@@ -549,6 +549,20 @@ AILOG_HUMAN_TEMPLATE = (
 )
 
 
+GOVERNANCE_RUBRIC = (
+    "## Canonical acceptance rubric (governance/narrative deliverables — apply as-is, don't re-derive)\n"
+    "- **Stub = FAIL.** A required section is a stub if its only non-heading, non-blockquote content "
+    "is blank, `—`, `-`, an HTML comment `<!-- ... -->`, or an unfilled placeholder matching "
+    "`<...>` (angle-bracket) or `_(...)_` (markdown italic). Any real sentence passes.\n"
+    "- **Floors.** Interactions: at least 3 numbered entries (`^### [0-9]` *within the Interactions "
+    "section only*). Corrections: at least 1 real entry. Reflection: 3-5 bullets, each naming a "
+    "concrete artifact (work-item id, endpoint, agent role, error class, or filename).\n"
+    "- **Scope counts to the section** (e.g. `sed -n '/^## Interactions/,/^## /p' FILE | grep -c "
+    "'^### [0-9]'`), never the whole file.\n"
+    "- All checks are reviewer-applicable (human or LLM); no deterministic automated test is required."
+)
+
+
 def cmd_ailog(args: argparse.Namespace) -> int:
     """Render docs/AI_LOG.md. AUTO: Summary + Appendix (harness agent calls) from metrics.jsonl.
     HUMAN (preserved across re-runs): Interactions, Corrections, Reflection."""
@@ -1155,9 +1169,7 @@ def cmd_engage(args: argparse.Namespace) -> int:
             "## Acceptance mode: RUBRIC (governance/narrative deliverable, lane=standing)\n"
             "Acceptance is by rubric, NOT deterministic automated tests. Do NOT block because an item "
             "'cannot be expressed as a deterministic/automated test' — that is expected and fine for a "
-            "narrative artifact. Require instead a clear, reviewer-checkable rubric: enumerate the "
-            "required elements, each with an objective presence check and a stated quality bar; a human "
-            "or LLM reviewer applies it."
+            "narrative artifact. Apply the canonical rubric below as-is.\n\n" + GOVERNANCE_RUBRIC
         )
     else:
         accept = (
