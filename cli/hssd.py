@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -646,6 +647,176 @@ def _git_switch(branch: str) -> None:
         subprocess.run(["git", "checkout", "-q", branch], check=False)
 
 
+# ── Project state machine ───────────────────────────────────────────────────────
+# One blessed order, each step guarding the next:
+#   initialized → briefed → architected (human-locked) → planned → in_progress → delivered
+# Nothing engineers before the architecture is locked. The phase is INFERRED from the
+# artifacts on disk + the architecture lock, so `hssd status` always shows the truth,
+# never a flag that drifted out of sync.
+
+def _locks_dir(project: Path) -> Path:
+    return project / ".harness" / "locks"
+
+
+def _arch_lock_path(project: Path) -> Path:
+    return _locks_dir(project) / "architecture.json"
+
+
+def _adr_path(project: Path) -> Path:
+    return project / "docs" / "ADR.md"
+
+
+def _architecture_locked(project: Path) -> bool:
+    return _arch_lock_path(project).exists()
+
+
+def _file_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+
+
+def _adr_is_stub(body: str) -> bool:
+    """An ADR that is still just placeholders/headings — not yet a real decision record."""
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    content = [ln for ln in lines if not ln.startswith("#")]
+    if len(content) < 3:
+        return True
+    placeholder = re.compile(r"^(<.*>|_.*_|—|-+|\*+|<!--.*-->)$")
+    return all(placeholder.match(ln) for ln in content)
+
+
+_STATE_ORDER = ["initialized", "briefed", "architected", "planned", "in_progress", "delivered"]
+_NEXT_CMD = {
+    "initialized": "hssd init",
+    "briefed": "hssd overview add <brief.md>  →  hssd overview analyze",
+    "architected": "hssd overview architect  →  (iterate)  →  hssd architecture approve",
+    "planned": "hssd overview split",
+    "in_progress": "hssd engage <LOC-id>",
+    "delivered": "— all work items delivered —",
+}
+
+
+def _project_state(project: Path) -> dict:
+    """Infer the project phase from artifacts on disk + the architecture lock."""
+    h = project / ".harness"
+    s = {
+        "initialized": h.exists(),
+        "briefed": (h / "overview.md").exists(),
+        "architected": _architecture_locked(project),
+        "planned": False,
+        "in_progress": False,
+        "delivered": False,
+    }
+    pm = h / "pm.sqlite"
+    if pm.exists():
+        con = sqlite3.connect(pm)
+        try:
+            statuses = [r[0] for r in con.execute("SELECT status FROM work_items")]
+        except sqlite3.OperationalError:
+            statuses = []
+        finally:
+            con.close()
+        if statuses:
+            s["planned"] = True
+            s["in_progress"] = any(st in ("in-progress", "done") for st in statuses)
+            s["delivered"] = all(st == "done" for st in statuses)
+    # The phase = the first unmet ACTIONABLE step. 'delivered' is terminal (an achievement, not a
+    # step you do), so once every actionable milestone is reached you stay 'in_progress' until all
+    # work items are done. This keeps the fleet anomaly visible (a False before a later True surfaces
+    # as the phase to fix) without mislabelling a mid-engagement project as 'delivered'.
+    actionable = ["initialized", "briefed", "architected", "planned", "in_progress"]
+    current = next((m for m in actionable if not s[m]), None)
+    if current is None:
+        current = "delivered" if s["delivered"] else "in_progress"
+    s["phase"] = current
+    # anomaly: a backlog exists but the architecture was never locked (planned ahead of architecture)
+    s["stale_plan"] = s["planned"] and not s["architected"]
+    return s
+
+
+def _write_state_snapshot(project: Path, s: dict) -> None:
+    """Persist a snapshot for external tools (the inferred phase remains the source of truth)."""
+    p = project / ".harness" / "state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    snap = {"phase": s["phase"], "milestones": {k: s[k] for k in _STATE_ORDER},
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    p.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Show the project state machine, the current step, and the next command to run."""
+    project = Path(".").resolve()
+    s = _project_state(project)
+    _write_state_snapshot(project, s)
+    print("Harness Studio · project state\n")
+    rows = [
+        ("initialized", "initialized", "repo adopted (hssd init)"),
+        ("briefed", "briefed", "overview captured"),
+        ("architected", "architected", "architecture locked (human)"),
+        ("planned", "planned", "backlog split into work items"),
+        ("in_progress", "in progress", "engagements running"),
+        ("delivered", "delivered", "all work items done"),
+    ]
+    for key, label, desc in rows:
+        mark = "✓" if s[key] else ("▸" if s["phase"] == key else "·")
+        here = "   ← you are here" if s["phase"] == key else ""
+        print(f"  {mark} {label:<13}{desc}{here}")
+    print()
+    if s["stale_plan"]:
+        print("  ⚠ a backlog exists but the architecture was never locked — it was planned ahead of")
+        print("    architecture. Lock it, then re-split so stories inherit the ADR:")
+        print("      hssd overview architect → hssd architecture approve → hssd reset --backlog → split\n")
+    print(f"  next: {_NEXT_CMD[s['phase']]}")
+    return 0
+
+
+def cmd_architecture(args: argparse.Namespace) -> int:
+    """The human lock over the SHARED architecture. The system proposes (hssd overview architect);
+    the engineer iterates and owns docs/ADR.md; this records the approval that unlocks split."""
+    project = Path(".").resolve()
+    adr = _adr_path(project)
+    lock = _arch_lock_path(project)
+
+    if args.action == "status":
+        if not lock.exists():
+            print("architecture: NOT locked. Draft + iterate with `hssd overview architect`, then "
+                  "`hssd architecture approve`.")
+            return 0
+        meta = json.loads(lock.read_text(encoding="utf-8"))
+        print(f"architecture: LOCKED {meta.get('locked_at', '?')} (by {meta.get('by', '?')})")
+        if _file_sha(adr) != meta.get("adr_sha256", ""):
+            print("  ⚠ docs/ADR.md changed since the lock — re-approve to re-lock (or it's stale).")
+        return 0
+
+    if args.action == "reopen":
+        if lock.exists():
+            lock.unlink()
+            _log(project, "architecture reopen", "lock cleared")
+            print("architecture: reopened (lock cleared). Amend docs/ADR.md, then re-approve.")
+        else:
+            print("architecture: already open (no lock).")
+        return 0
+
+    # approve — the human lock
+    if not adr.exists():
+        print("BLOCK: docs/ADR.md does not exist. Run `hssd overview architect` to draft it, "
+              "iterate, then approve.", file=sys.stderr)
+        return 1
+    body = adr.read_text(encoding="utf-8").strip()
+    if len(body) < 120 or _adr_is_stub(body):
+        print("BLOCK: docs/ADR.md still looks like a stub. Fill in the data model, ownership, tier "
+              "and key decisions before approving.", file=sys.stderr)
+        return 1
+    _locks_dir(project).mkdir(parents=True, exist_ok=True)
+    meta = {"locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "by": os.environ.get("USER") or os.environ.get("USERNAME") or "engineer",
+            "adr_path": "docs/ADR.md", "adr_sha256": _file_sha(adr)}
+    lock.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _log(project, "architecture approve", meta["adr_sha256"][:12])
+    print("✓ architecture LOCKED. docs/ADR.md is now the shared contract for every story.")
+    print("  next: hssd overview split   (stories inherit the ADR)")
+    return 0
+
+
 def cmd_work(args: argparse.Namespace) -> int:
     project = Path(".").resolve()
     con = _pm(project)
@@ -1049,8 +1220,73 @@ def cmd_overview(args: argparse.Namespace) -> int:
         print(f"OK: overview stored ({args.file})")
         return 0
 
+    # architect: propose the SHARED project architecture (the contract every story inherits).
+    # The system drafts; the engineer iterates and owns docs/ADR.md; the adversary only advises.
+    if args.action == "architect":
+        if not ov.exists():
+            print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
+            return 1
+        brief = ov.read_text(encoding="utf-8")
+        plan_hint = ("\n\nDecomposition hint (concerns already identified):\n"
+                     + plan_path.read_text(encoding="utf-8")) if plan_path.exists() else ""
+        draft = _run_role(
+            "architect",
+            "Design the SHARED architecture for this WHOLE project from the brief — the project-level "
+            "contract every story will inherit, not one story's design. Output ONLY a 1-page "
+            "Architecture Decision Record in Markdown with these sections:\n"
+            "## Data model — every entity/table, its fields, AND ownership (which story/migration "
+            "creates it, and who writes each mutable column — make cross-story ownership explicit).\n"
+            "## Stack tier — lightweight (FastAPI+SQLite) or full (FastAPI+Postgres); justify.\n"
+            "## Concurrency & isolation — the strategy for each stated guarantee (atomic counter, "
+            "BEGIN IMMEDIATE / SELECT FOR UPDATE, idempotency key).\n"
+            "## Key decisions — the 2-3 most important, each with why + the rejected alternative.\n"
+            "## Assumptions — everything the brief leaves open, each stated as a decision.\n"
+            f"\n{brief}{plan_hint}",
+        )
+        docs = project / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "ADR.draft.md").write_text(draft, encoding="utf-8")
+        seeded = not _adr_path(project).exists()
+        if seeded:
+            _adr_path(project).write_text(draft, encoding="utf-8")
+        _log(project, "overview architect", "draft written")
+        print("\n— architecture-adversary (advisory — it informs, you decide) —")
+        adv = _run_role(
+            "architecture-adversary",
+            "Review this PROJECT architecture draft. Return JSON {findings:[{issue, options[], "
+            "recommended}]}. You ADVISE the engineer; you do NOT block.\n\n" + draft,
+            expect_json=True,
+        )
+        try:
+            findings = _json_loads(adv).get("findings", [])
+        except (json.JSONDecodeError, AttributeError):
+            findings = []
+        for i, f in enumerate(findings, 1):
+            if isinstance(f, dict):
+                print(f"  {i}. {f.get('issue', '')}")
+                if f.get("recommended"):
+                    print(f"     ★ {f['recommended']}")
+        if not findings:
+            print("  (no structured findings)")
+        print()
+        if seeded:
+            print("Draft written to docs/ADR.md (+ docs/ADR.draft.md). Iterate freely — edit it, or "
+                  "re-run `hssd overview architect` for a fresh proposal in docs/ADR.draft.md.")
+        else:
+            print("Fresh proposal in docs/ADR.draft.md (your docs/ADR.md was left untouched). Merge "
+                  "what you want into docs/ADR.md.")
+        print("When the architecture is yours, lock it:  hssd architecture approve")
+        return 0
+
     # split: create work items from the ALREADY-APPROVED plan (no model re-call).
     if args.action == "split":
+        if not _architecture_locked(project):
+            print("BLOCK: architecture is not locked. The backlog must inherit a locked architecture "
+                  "(else stories plan against an undefined data model — the cross-story ambiguity we "
+                  "fix here). Run:\n"
+                  "  hssd overview architect → (iterate) → hssd architecture approve",
+                  file=sys.stderr)
+            return 1
         if not plan_path.exists():
             print("BLOCK: no plan yet. Run 'hssd overview analyze' first, review it, then split.",
                   file=sys.stderr)
@@ -1181,6 +1417,14 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage", f"{args.id} config-enabled")
         print(f"✓ {args.id} enabled (config) — status=done")
         return 0
+    # No story engineers before the architecture gate (config/standing are exempt — config is
+    # auto-provided, and the ADR itself is a standing artifact, so requiring its own lock is circular).
+    if (lane or "feature") not in ("config", "standing") and not _architecture_locked(project) \
+            and not args.force:
+        print("BLOCK: architecture is not locked — no story engages before the architecture gate. "
+              "Run `hssd overview architect` then `hssd architecture approve` first "
+              "(or --force to override).", file=sys.stderr)
+        return 1
     if status == "open":
         # Auto-claim (atomic compare-and-swap) so engage is one step; keeps the branch discipline.
         branch = f"harness/local-{args.id.lower()}-{_slug(title)}"
@@ -1251,7 +1495,14 @@ def cmd_engage(args: argparse.Namespace) -> int:
             "Acceptance is by deterministic, executable tests. Any guarantee/atomicity/concurrency "
             "requirement MUST become a stress test."
         )
-    base_ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)\n\n{accept}"
+    adr = _adr_path(project)
+    adr_ctx = ""
+    if adr.exists():  # the locked shared contract — stories inherit it, the skeptic stops re-deriving it
+        adr_ctx = ("\n\n## Locked architecture (docs/ADR.md — the shared contract; treat its data "
+                   "model, ownership and tier as SETTLED. Do NOT re-raise them as open questions.)\n"
+                   + adr.read_text(encoding="utf-8"))
+    base_ctx = (f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)\n\n"
+                f"{accept}{adr_ctx}")
 
     def current_ctx() -> str:  # re-read assumptions each call so recorded answers take effect
         c = base_ctx
@@ -1444,12 +1695,20 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--into", default=None, help="target project dir for import (default: cwd)")
     pt.set_defaults(func=cmd_template)
 
-    po = sub.add_parser("overview", help="register/analyze the project overview, then split into work items")
-    po.add_argument("action", choices=["add", "analyze", "split"])
+    po = sub.add_parser("overview", help="register/analyze the brief, architect the shared design, then split")
+    po.add_argument("action", choices=["add", "analyze", "architect", "split"])
     po.add_argument("file", nargs="?")
     po.add_argument("--split-concerns", action="store_true",
                     help="one-shot: analyze AND create the work items (skips the review gate)")
     po.set_defaults(func=cmd_overview)
+
+    pst = sub.add_parser("status", help="show the project state machine + the next command to run")
+    pst.set_defaults(func=cmd_status)
+
+    parch = sub.add_parser("architecture",
+                           help="the human lock over the shared architecture (approve / status / reopen)")
+    parch.add_argument("action", choices=["approve", "status", "reopen"])
+    parch.set_defaults(func=cmd_architecture)
 
     pw = sub.add_parser("work", help="work items via the PM Port (local SQLite or synced PM)")
     pw.add_argument("action", choices=["add", "list", "show", "claim"])
