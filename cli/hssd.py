@@ -765,7 +765,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("  ⚠ a backlog exists but the architecture was never locked — it was planned ahead of")
         print("    architecture. Lock it, then re-split so stories inherit the ADR:")
         print("      hssd overview architect → hssd architecture approve → hssd reset --backlog → split\n")
-    print(f"  next: {_NEXT_CMD[s['phase']]}")
+    nxt = _NEXT_CMD[s["phase"]]
+    if s["phase"] == "planned" and not (project / ".harness" / "plan.json").exists():
+        nxt = "hssd overview analyze  →  hssd overview split"  # plan was wiped (e.g. reset --backlog)
+    print(f"  next: {nxt}")
     return 0
 
 
@@ -1227,8 +1230,8 @@ def cmd_overview(args: argparse.Namespace) -> int:
             print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
             return 1
         brief = ov.read_text(encoding="utf-8")
-        plan_hint = ("\n\nDecomposition hint (concerns already identified):\n"
-                     + plan_path.read_text(encoding="utf-8")) if plan_path.exists() else ""
+        # Architecture is a function of the PROBLEM, not of the decomposition — the architect stands
+        # on the brief alone (it runs BEFORE analyze/split, which then inherit the locked ADR).
         draft = _run_role(
             "architect",
             "Design the SHARED architecture for this WHOLE project from the brief — the project-level "
@@ -1241,7 +1244,7 @@ def cmd_overview(args: argparse.Namespace) -> int:
             "BEGIN IMMEDIATE / SELECT FOR UPDATE, idempotency key).\n"
             "## Key decisions — the 2-3 most important, each with why + the rejected alternative.\n"
             "## Assumptions — everything the brief leaves open, each stated as a decision.\n"
-            f"\n{brief}{plan_hint}",
+            f"\n{brief}",
         )
         docs = project / "docs"
         docs.mkdir(parents=True, exist_ok=True)
@@ -1300,18 +1303,29 @@ def cmd_overview(args: argparse.Namespace) -> int:
         print(f"OK: created {n} work item(s) from the approved plan. Review with 'hssd work list'.")
         return 0
 
-    # analyze: understand the brief, propose a decomposition, SAVE the plan, but create nothing.
+    # analyze: decompose the brief INTO the locked architecture, SAVE the plan, but create nothing.
     if not ov.exists():
         print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
         return 1
+    if not _architecture_locked(project):
+        print("BLOCK: architecture is not locked. Decomposition must inherit the architecture (else "
+              "stories plan against an undefined data model — the cross-story ambiguity we fix here). "
+              "Run:\n  hssd overview architect → (iterate) → hssd architecture approve", file=sys.stderr)
+        return 1
     text = ov.read_text(encoding="utf-8")
+    adr = _adr_path(project)
+    adr_ctx = ("\n\n## Locked architecture (docs/ADR.md) — decompose IN TERMS OF this. Each concern "
+               "should name the entities/tables and ownership it touches; do NOT re-open data-model "
+               "or tier questions — they are settled here.\n" + adr.read_text(encoding="utf-8")) \
+        if adr.exists() else ""
     out = _run_role(
         "product-analyst",
-        "Analyze this project brief. Return JSON with: 'analysis' (understanding + short plan), "
-        "'concerns' (a list of {title, type, kind} the brief decomposes into — kind is 'task' to "
-        "engineer, or 'config' for a capability the harness already provides and just needs "
-        "enabling, e.g. the AI Interaction Log / logging / audit), and 'technologies' (a list)."
-        f"\n\n{text}",
+        "Analyze this project brief and decompose it against the locked architecture. Return JSON "
+        "with: 'analysis' (understanding + short plan), 'concerns' (a list of {title, type, kind} the "
+        "brief decomposes into — kind is 'task' to engineer, or 'config' for a capability the harness "
+        "already provides and just needs enabling, e.g. the AI Interaction Log / logging / audit), "
+        "and 'technologies' (a list)."
+        f"\n\n{text}{adr_ctx}",
         expect_json=True,
     )
     try:
