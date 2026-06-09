@@ -5,13 +5,18 @@
 ## Templates are git repos
 
 ```bash
-hssd new --from=git@github.com:hssd/hssd-sample-python-fastapi.git   # new project from a template
-hssd template import --from=git@github.com:hssd/hssd-sample-react-vite-spa.git   # add a template to an existing project
-hssd template list
+hssd new my-svc --from=https://github.com/harness-studio/hssd-template-fastapi-sqlite   # new project from a template
+hssd template import --from=https://github.com/acme/any-template                         # compose any template into this repo
+hssd template list                                                                        # blessed + your registered templates
+hssd template add --name my-tpl --from=https://github.com/acme/any-template --tech python,django   # register one you trust
 ```
 
-- The official/blessed templates are just **blessed git repos** maintained by us — no special "built-in" status, and **not bundled inside this package** (the framework ships no application code). Currently: [`hssd-template-fastapi-sqlite`](https://github.com/harness-studio/hssd-template-fastapi-sqlite) and [`hssd-template-vite-react-ts`](https://github.com/harness-studio/hssd-template-vite-react-ts). The CLI resolves templates **only** via `--from=<git-url>`; `hssd template list` prints the blessed catalog.
-- Anyone can publish a template repo and import it. Brought-in templates are **wrapped to conform** to the governance files (ADR, AI log, pre-commit, `.harness/`) on import.
+**Three tiers — known paths, never a wall:**
+1. **Blessed catalog** — verified template repos the framework knows. Currently [`hssd-template-fastapi-sqlite`](https://github.com/harness-studio/hssd-template-fastapi-sqlite) and [`hssd-template-vite-react-ts`](https://github.com/harness-studio/hssd-template-vite-react-ts). Not bundled inside this package (the framework ships no application code) — they're separate repos.
+2. **Your registered templates** — `hssd template add` saves a template *you* trust to `~/.hssd/templates.json`; it then shows up in `hssd template list` and the recommendations, across all your projects.
+3. **Any git URL** — `--from=<git-url>` pulls *any* template, official or not. No allow-list, no limit.
+
+Brought-in templates are **wrapped to conform** to the governance files (ADR, AI log, pre-commit, `.harness/`) on import.
 
 ## Composition config — default is append, declare only the exceptions
 

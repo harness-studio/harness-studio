@@ -40,6 +40,28 @@ TEMPLATE_CATALOG = [
      "tech": ["typescript", "react", "vite"]},
 ]
 
+
+def _user_catalog_path() -> Path:
+    """User-registered templates (the ones *you* trust), shared across all your projects."""
+    return Path.home() / ".hssd" / "templates.json"
+
+
+def _load_user_catalog() -> list[dict]:
+    p = _user_catalog_path()
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _full_catalog() -> list[dict]:
+    """Blessed templates + the user's own registered ones. Any git URL still works via --from."""
+    return ([dict(t, source="blessed") for t in TEMPLATE_CATALOG]
+            + [dict(t, source="user") for t in _load_user_catalog()])
+
 # Template repos can't ship dotfiles, so they're stored under dotfiles/ and renamed here.
 DOTFILE_MAP = {
     "vscode-extensions.json": ".vscode/extensions.json",
@@ -323,8 +345,27 @@ def _merge_json(target: Path, incoming_text: str, conflicts: list[str]) -> None:
 
 def cmd_template(args: argparse.Namespace) -> int:
     if args.action == "list":
-        for t in TEMPLATE_CATALOG:
-            print(f"{t['name']:<32} {', '.join(t['tech']):<26} {t['url']}")
+        for t in _full_catalog():
+            tech = ", ".join(t.get("tech", []))
+            print(f"{t.get('source', '?'):<8} {t['name']:<32} {tech:<26} {t.get('url', '')}")
+        print("\nAny git URL works too:  hssd new <name> --from=<git-url>  |  "
+              "hssd template import --from=<git-url>")
+        return 0
+
+    if args.action == "add":  # register a template YOU trust (non-official), reusable everywhere
+        if not (args.name and args.from_git):
+            print("BLOCK: add needs --name and --from=<git-url>", file=sys.stderr)
+            return 1
+        cat = _load_user_catalog()
+        if any(e.get("url") == args.from_git for e in cat):
+            print(f"already registered: {args.from_git}")
+            return 0
+        tech = [t.strip() for t in (args.tech or "").split(",") if t.strip()]
+        cat.append({"name": args.name, "url": args.from_git, "tech": tech})
+        p = _user_catalog_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(cat, indent=2), encoding="utf-8")
+        print(f"OK: registered '{args.name}' -> {args.from_git}\n  use it: hssd new <name> --from={args.from_git}")
         return 0
 
     # import: clone the template repo, then compose it into the project (additive merge).
@@ -652,10 +693,10 @@ def _recommend_templates(techs: list[str]) -> None:
     techset = {t.lower() for t in techs}
     covered: set[str] = set()
     matches: list[tuple[str, str, list[str]]] = []
-    for t in TEMPLATE_CATALOG:
-        hit = techset & {x.lower() for x in t["tech"]}
+    for t in _full_catalog():
+        hit = techset & {x.lower() for x in t.get("tech", [])}
         if hit:
-            matches.append((t["name"], t["url"], sorted(hit)))
+            matches.append((t["name"], t.get("url", ""), sorted(hit)))
             covered |= hit
     if matches:
         print("Matching blessed templates (git repos — optional):")
@@ -933,10 +974,12 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("path", nargs="?", default=".", help="repo to adopt (default: current dir)")
     pi.set_defaults(func=cmd_init)
 
-    pt = sub.add_parser("template", help="list blessed template repos / import one (git, via --from)")
-    pt.add_argument("action", choices=["list", "import"])
-    pt.add_argument("--from", dest="from_git", default=None, help="git URL of the template to import")
-    pt.add_argument("--into", default=None, help="target project dir (default: cwd)")
+    pt = sub.add_parser("template", help="list / import / register templates (blessed catalog + your own; any git URL)")
+    pt.add_argument("action", choices=["list", "import", "add"])
+    pt.add_argument("--from", dest="from_git", default=None, help="git URL (to import, or to register with add)")
+    pt.add_argument("--name", default=None, help="name when registering a template (add)")
+    pt.add_argument("--tech", default=None, help="comma-separated tech tags when registering (add)")
+    pt.add_argument("--into", default=None, help="target project dir for import (default: cwd)")
     pt.set_defaults(func=cmd_template)
 
     po = sub.add_parser("overview", help="register/analyze the project overview, then split into work items")
