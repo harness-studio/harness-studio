@@ -685,6 +685,71 @@ ROLE_SKILLS = {
 }
 
 
+def _claude_argv(exe: str, fmt: str) -> list[str]:
+    argv = [exe, "-p", "--output-format", fmt]
+    if fmt == "stream-json":
+        argv.append("--verbose")  # stream-json requires --verbose
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        argv = ["cmd", "/c", *argv]  # CreateProcess can't launch a .cmd shim directly
+    return argv
+
+
+def _claude_blocking(exe: str, composed: str):
+    """Single blocking JSON call (fallback / HSSD_STREAM=0). Returns (text, usage, cost, api_ms)."""
+    res = subprocess.run(_claude_argv(exe, "json"), input=composed, capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", check=False)
+    raw = (res.stdout or "").strip()
+    if not raw and (res.stderr or "").strip():
+        print(f"  (claude stderr) {res.stderr.strip()[:500]}", file=sys.stderr)
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return (obj.get("result", raw), obj.get("usage") or {},
+                    obj.get("total_cost_usd"), obj.get("duration_ms"))
+    except json.JSONDecodeError:
+        pass
+    return raw, {}, None, None
+
+
+def _claude_stream(exe: str, composed: str, role: str):
+    """Run `claude -p --output-format stream-json` and surface the interaction LIVE so a terminal
+    user isn't in the dark. Returns (text, usage, cost, api_ms)."""
+    proc = subprocess.Popen(_claude_argv(exe, "stream-json"), stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace", bufsize=1)
+    if proc.stdin:
+        proc.stdin.write(composed)
+        proc.stdin.close()
+    text, usage, cost, api_ms = "", {}, None, None
+    print(f"    · {role} ▸ ", end="", flush=True)
+    assert proc.stdout
+    for line in proc.stdout:  # newline-delimited JSON events
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            ev = json.loads(s)
+        except json.JSONDecodeError:
+            print(f"\n    {s[:200]}", flush=True)  # non-JSON (likely stderr) — surface it
+            continue
+        et = ev.get("type")
+        if et == "assistant":
+            for blk in ((ev.get("message") or {}).get("content") or []):
+                if isinstance(blk, dict):
+                    if blk.get("type") == "text" and blk.get("text"):
+                        sys.stdout.write(blk["text"]); sys.stdout.flush()
+                    elif blk.get("type") == "tool_use":
+                        print(f"\n    → tool: {blk.get('name', '?')}", flush=True)
+        elif et == "result":
+            text = ev.get("result", text)
+            usage = ev.get("usage") or {}
+            cost = ev.get("total_cost_usd")
+            api_ms = ev.get("duration_ms")
+    proc.wait()
+    print()  # newline after the streamed text
+    return text, usage, cost, api_ms
+
+
 def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
     """Invoke a role as a focused agent. Backend: 'claude' (Claude Code) or 'mock' (tests).
 
@@ -716,9 +781,7 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
                  "prompt_preview": prompt[:280], "result_preview": out[:280]})
         return out
 
-    # Real backend. Resolve the CLI via PATHEXT (on Windows it's a `claude.cmd` shim that bare
-    # argv won't find), pass the prompt over stdin (dodges Windows arg-length/quoting limits),
-    # and request JSON so we capture token usage, cost, and duration.
+    # Real backend. Resolve the CLI via PATHEXT (on Windows it's a `claude.cmd` shim).
     exe = shutil.which("claude")
     if not exe:
         print("BLOCK: 'claude' CLI not found on PATH. Install Claude Code, or set "
@@ -726,27 +789,19 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
         _metric({"role": role, "backend": "claude", "duration_s": round(time.monotonic() - t0, 3),
                  "error": "claude-not-found", "prompt_chars": len(prompt)})
         return ""
-    argv = [exe, "-p", "--output-format", "json"]
-    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
-        argv = ["cmd", "/c", *argv]  # CreateProcess can't launch a .cmd batch shim directly
-    res = subprocess.run(
-        argv, input=composed, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", check=False,
-    )
+
+    # Stream the interaction LIVE (silence in a terminal = "in the dark"); fall back to a single
+    # blocking call if streaming isn't available. HSSD_STREAM=0 forces the quiet blocking path.
+    if os.environ.get("HSSD_STREAM", "1") != "0":
+        try:
+            text, usage, cost, api_ms = _claude_stream(exe, composed, role)
+        except Exception as e:  # noqa: BLE001 — any stream hiccup → safe fallback
+            print(f"    (stream unavailable: {e}; falling back to a blocking call)", file=sys.stderr)
+            text, usage, cost, api_ms = _claude_blocking(exe, composed)
+    else:
+        text, usage, cost, api_ms = _claude_blocking(exe, composed)
+
     elapsed = round(time.monotonic() - t0, 3)
-    raw = (res.stdout or "").strip()
-    if not raw and (res.stderr or "").strip():
-        print(f"  (claude stderr) {res.stderr.strip()[:500]}", file=sys.stderr)
-    text, usage, cost, api_ms = raw, {}, None, None
-    try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            text = obj.get("result", raw)  # the assistant's text (may itself be JSON)
-            usage = obj.get("usage") or {}
-            cost = obj.get("total_cost_usd")
-            api_ms = obj.get("duration_ms")
-    except json.JSONDecodeError:
-        pass  # older CLI without --output-format json: treat stdout as plain text
     _metric({
         "role": role, "backend": "claude", "duration_s": elapsed, "api_ms": api_ms,
         "input_tokens": usage.get("input_tokens", 0),
