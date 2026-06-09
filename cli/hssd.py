@@ -26,9 +26,19 @@ import time
 from pathlib import Path
 
 PKG_ROOT = Path(__file__).resolve().parent.parent  # the harness-studio package
-SCAFFOLDS = PKG_ROOT / "scaffolds"
 TEMPLATES = PKG_ROOT / "templates"
 AGENTS = PKG_ROOT / "agents"
+
+# Blessed template repos. Templates are SEPARATE git repos (see TEMPLATES.md); the CLI resolves
+# them only via --from=<git-url>. This catalog powers `template list` + the recommendations.
+TEMPLATE_CATALOG = [
+    {"name": "hssd-template-fastapi-sqlite",
+     "url": "https://github.com/harness-studio/hssd-template-fastapi-sqlite",
+     "tech": ["python", "fastapi", "sqlite"]},
+    {"name": "hssd-template-vite-react-ts",
+     "url": "https://github.com/harness-studio/hssd-template-vite-react-ts",
+     "tech": ["typescript", "react", "vite"]},
+]
 
 # Template repos can't ship dotfiles, so they're stored under dotfiles/ and renamed here.
 DOTFILE_MAP = {
@@ -170,18 +180,14 @@ def cmd_new(args: argparse.Namespace) -> int:
         print(f"BLOCK: {dest} exists and is not empty", file=sys.stderr)
         return 1
 
-    # 1. Materialize the template (from git, or a local blessed scaffold).
+    # 1. Either clone a template repo (--from=<git-url>) or start an empty governed project.
     if args.from_git:
         subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(dest)], check=True)
         shutil.rmtree(dest / ".git", ignore_errors=True)
     else:
-        src = SCAFFOLDS / args.template
-        if not src.exists():
-            print(f"BLOCK: unknown template '{args.template}'", file=sys.stderr)
-            return 1
-        shutil.copytree(src, dest)
+        dest.mkdir(parents=True, exist_ok=True)
 
-    # 2. Rename dotfiles (dotfiles/<x> -> the real dotfile path).
+    # 2. Rename any dotfiles the template shipped (dotfiles/<x> -> the real dotfile path).
     df = dest / "dotfiles"
     if df.exists():
         for f in df.iterdir():
@@ -198,8 +204,9 @@ def cmd_new(args: argparse.Namespace) -> int:
         if tpl.exists() and not (docs / name).exists():
             shutil.copy(tpl, docs / name)
 
-    # 4. This is a managed PROJECT (not a template) -> type: project.
-    (dest / "hssd.yaml").write_text(f"type: project\nstack: {args.template}\n", encoding="utf-8")
+    # 4. This is a managed PROJECT (not a template) -> type: project. Stack is sniffed.
+    stack = _detect_stack(dest)
+    (dest / "hssd.yaml").write_text(f"type: project\nstack: {stack}\n", encoding="utf-8")
 
     # 5. Local PM spine + runtime dir (gitignored), then git on `main`.
     harness = dest / ".harness"
@@ -211,8 +218,9 @@ def cmd_new(args: argparse.Namespace) -> int:
     # 6. Wire the team into .claude/ so Claude Code sees the subagents + skills.
     nclaude, _ = _wire_claude(dest)
 
-    _log(dest, "new", f"template={args.template} from={args.from_git or 'local'} claude={nclaude}")
-    print(f"OK: created {dest} (type: project, stack: {args.template}); {nclaude} .claude file(s) wired")
+    src = args.from_git or "empty governed project"
+    _log(dest, "new", f"from={src} stack={stack} claude={nclaude}")
+    print(f"OK: created {dest} (type: project, stack: {stack}, from: {src}); {nclaude} .claude file(s) wired")
     return 0
 
 
@@ -315,24 +323,19 @@ def _merge_json(target: Path, incoming_text: str, conflicts: list[str]) -> None:
 
 def cmd_template(args: argparse.Namespace) -> int:
     if args.action == "list":
-        if SCAFFOLDS.exists():
-            for p in sorted(SCAFFOLDS.iterdir()):
-                if p.is_dir():
-                    print(p.name)
+        for t in TEMPLATE_CATALOG:
+            print(f"{t['name']:<32} {', '.join(t['tech']):<26} {t['url']}")
         return 0
 
-    # import: materialize the incoming template, then compose into the project.
+    # import: clone the template repo, then compose it into the project (additive merge).
+    if not args.from_git:
+        print("BLOCK: import needs --from=<git-url> (see 'hssd template list')", file=sys.stderr)
+        return 1
     project = Path(args.into or ".").resolve()
     tmp = Path(tempfile.mkdtemp())
     incoming_root = tmp / "incoming"
-    if args.from_git:
-        subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(incoming_root)], check=True)
-        shutil.rmtree(incoming_root / ".git", ignore_errors=True)
-    elif args.template:
-        shutil.copytree(SCAFFOLDS / args.template, incoming_root)
-    else:
-        print("BLOCK: import needs --from=<git-url> or --template=<name>", file=sys.stderr)
-        return 1
+    subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(incoming_root)], check=True)
+    shutil.rmtree(incoming_root / ".git", ignore_errors=True)
 
     conflicts: list[str] = []
     for f in sorted(incoming_root.rglob("*")):
@@ -641,42 +644,25 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
     return text.strip()
 
 
-def _available_templates() -> list[tuple[str, list[str]]]:
-    """Local scaffolds and the tech tags they declare in hssd.yaml (`tech: [...]`)."""
-    out: list[tuple[str, list[str]]] = []
-    if SCAFFOLDS.exists():
-        for d in sorted(SCAFFOLDS.iterdir()):
-            if not d.is_dir():
-                continue
-            tech: list[str] = []
-            hy = d / "hssd.yaml"
-            if hy.exists():
-                for line in hy.read_text(encoding="utf-8").splitlines():
-                    m = re.match(r"\s*tech:\s*\[(.*)\]", line)
-                    if m:
-                        tech = [t.strip() for t in m.group(1).split(",") if t.strip()]
-            out.append((d.name, tech))
-    return out
-
-
 def _recommend_templates(techs: list[str]) -> None:
-    """Suggest blessed templates for detected tech; otherwise note the agents build directly."""
+    """Suggest blessed template repos (git) for detected tech; else note the agents build directly."""
     if not techs:
         return
     print(f"\nDetected technologies: {', '.join(techs)}")
     techset = {t.lower() for t in techs}
     covered: set[str] = set()
-    matches: list[tuple[str, list[str]]] = []
-    for name, tech in _available_templates():
-        hit = techset & {t.lower() for t in tech}
+    matches: list[tuple[str, str, list[str]]] = []
+    for t in TEMPLATE_CATALOG:
+        hit = techset & {x.lower() for x in t["tech"]}
         if hit:
-            matches.append((name, sorted(hit)))
+            matches.append((t["name"], t["url"], sorted(hit)))
             covered |= hit
     if matches:
-        print("Matching blessed templates (optional):")
-        for name, hit in matches:
+        print("Matching blessed templates (git repos — optional):")
+        for name, url, hit in matches:
             print(f"  - {name}  (covers: {', '.join(hit)})")
-        print("  -> use one: hssd new --from=<repo>  |  hssd template import --from=<repo>")
+            print(f"      into this repo:  hssd template import --from={url}")
+            print(f"      fresh project:   hssd new <name> --from={url}")
     uncovered = sorted(techset - covered)
     if uncovered:
         print(f"No blessed template for: {', '.join(uncovered)}")
@@ -938,20 +924,18 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="hssd", description="Harness Studio CLI (skeleton)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pn = sub.add_parser("new", help="create a project from a template")
+    pn = sub.add_parser("new", help="create a project (empty governed, or from a template repo via --from)")
     pn.add_argument("name")
-    pn.add_argument("--template", default="backend-fastapi-sqlite")
-    pn.add_argument("--from", dest="from_git", default=None)
+    pn.add_argument("--from", dest="from_git", default=None, help="git URL of a blessed template repo")
     pn.set_defaults(func=cmd_new)
 
     pi = sub.add_parser("init", help="turn ON Harness Studio in an existing repo (non-destructive)")
     pi.add_argument("path", nargs="?", default=".", help="repo to adopt (default: current dir)")
     pi.set_defaults(func=cmd_init)
 
-    pt = sub.add_parser("template", help="manage templates")
+    pt = sub.add_parser("template", help="list blessed template repos / import one (git, via --from)")
     pt.add_argument("action", choices=["list", "import"])
-    pt.add_argument("--from", dest="from_git", default=None)
-    pt.add_argument("--template", default=None, help="local scaffold name (for import without git)")
+    pt.add_argument("--from", dest="from_git", default=None, help="git URL of the template to import")
     pt.add_argument("--into", default=None, help="target project dir (default: cwd)")
     pt.set_defaults(func=cmd_template)
 

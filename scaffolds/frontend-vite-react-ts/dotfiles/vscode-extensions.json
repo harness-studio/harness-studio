@@ -1,9 +1,0 @@
-{
-  "// note": "Harness Studio configures VS Code using EXISTING extensions — it ships no custom plugin.",
-  "// install-target": ".vscode/extensions.json",
-  "recommendations": [
-    "dbaeumer.vscode-eslint",
-    "esbenp.prettier-vscode",
-    "bradlc.vscode-tailwindcss"
-  ]
-}

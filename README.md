@@ -141,8 +141,7 @@ harness-studio/
   00–04 + VALUE-RISK-ROI    # operating manual, roles, process, deliverables, kickoff, ROI
   agents/                   # the team — 13 subagents (specialists + adversaries)
   skills/                   # python, fastapi, typescript + SKILL-AUTHORING
-  templates/                # ADR, AI log, stories/AC, Definition of Done
-  scaffolds/                # backend-fastapi-sqlite, frontend-vite-react-ts (verified)
+  templates/                # ADR, AI log, stories/AC, Definition of Done (doc templates)
   workflows/                # engagement.yaml, janitor.yaml (Archon-ready)
   examples/                 # illustrative example engagements (NOT the framework — outputs of it)
   cli/hssd.py               # the CLI
@@ -154,9 +153,9 @@ harness-studio/
 
 Research preview. The full flow is implemented and its orchestration verified end-to-end (with the `mock` backend); real agent execution runs via the `claude` backend.
 
-- ✅ `new`, `overview`, `work` (atomic claim), `engage` (6 phases + 5-checker P4), `template import` (merge), `janitor` (dedup), `log`, `update`.
-- ✅ Scaffolds verified: backend concurrency test passes; frontend typechecks.
-- ⏳ Next: `pm add` / `vscode setup`, a bundled wheel (install without cloning), and running a real engagement on the `claude` backend.
+- ✅ `new`, `init` (adopt any repo), `overview` (analyze → split), `work` (atomic claim), `engage` (6 phases + 5-checker P4), `template` (list/import via `--from`), `janitor` (dedup), `log`, `stats` (time/tokens/cost), `ailog` (AI Interaction Log), `update`.
+- ✅ Blessed templates are **separate git repos** (`github.com/harness-studio/hssd-template-*`), resolved via `--from`.
+- ⏳ Next: `pm add` / `vscode setup`, native Claude-Code subagent backend, and the runtime-execution gate ([`proposals/`](proposals)).
 
 ---
 

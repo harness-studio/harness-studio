@@ -10,7 +10,7 @@ hssd template import --from=git@github.com:hssd/hssd-sample-react-vite-spa.git  
 hssd template list
 ```
 
-- The official/blessed templates (e.g., `hssd-sample-python-fastapi`, `hssd-sample-react-vite-spa`) are just **blessed repos** maintained by us — no special "built-in" status. The scaffolds in this package are reference sources that get published as their own repos.
+- The official/blessed templates are just **blessed git repos** maintained by us — no special "built-in" status, and **not bundled inside this package** (the framework ships no application code). Currently: [`hssd-template-fastapi-sqlite`](https://github.com/harness-studio/hssd-template-fastapi-sqlite) and [`hssd-template-vite-react-ts`](https://github.com/harness-studio/hssd-template-vite-react-ts). The CLI resolves templates **only** via `--from=<git-url>`; `hssd template list` prints the blessed catalog.
 - Anyone can publish a template repo and import it. Brought-in templates are **wrapped to conform** to the governance files (ADR, AI log, pre-commit, `.harness/`) on import.
 
 ## Composition config — default is append, declare only the exceptions
