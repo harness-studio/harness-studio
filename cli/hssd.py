@@ -452,7 +452,10 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
         if mf and Path(mf).exists():
             return json.loads(Path(mf).read_text(encoding="utf-8")).get(role, "")
         return os.environ.get("HSSD_MOCK_OUTPUT", "")
-    res = subprocess.run(["claude", "-p", composed], capture_output=True, text=True, check=False)
+    res = subprocess.run(
+        ["claude", "-p", composed],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
     return res.stdout.strip()
 
 
@@ -498,9 +501,39 @@ def _recommend_templates(techs: list[str]) -> None:
         print("  -> the agents build these directly using the skills (no template needed).")
 
 
+def _create_work_items(project: Path, concerns: list[dict]) -> int:
+    """Insert each concern as an open work item in the PM spine. Returns how many were created."""
+    con = _pm(project)
+    base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+    for i, c in enumerate(concerns, start=1):
+        con.execute(
+            "INSERT INTO work_items(id, title, type, status, created_at, source) "
+            "VALUES(?,?,?,'open',?, 'overview')",
+            (f"LOC-{base + i}", c.get("title", "(untitled)"), c.get("type", "feature"),
+             datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+    con.commit()
+    return len(concerns)
+
+
+def _print_plan(data: dict) -> list[dict]:
+    """Print the analyst's understanding + the proposed work items. Returns the concerns."""
+    analysis = data.get("analysis", "")
+    if analysis:
+        print(analysis)
+    concerns = data.get("concerns", [])
+    if concerns:
+        print("\nProposed work items (review these — nothing is created yet):")
+        for i, c in enumerate(concerns, start=1):
+            print(f"  {i}. [{c.get('type', 'feature')}] {c.get('title', '(untitled)')}")
+    _recommend_templates(data.get("technologies", []))
+    return concerns
+
+
 def cmd_overview(args: argparse.Namespace) -> int:
     project = Path(".").resolve()
     ov = project / ".harness" / "overview.md"
+    plan_path = project / ".harness" / "plan.json"
 
     if args.action == "add":
         src = Path(args.file) if args.file else None
@@ -513,36 +546,49 @@ def cmd_overview(args: argparse.Namespace) -> int:
         print(f"OK: overview stored ({args.file})")
         return 0
 
+    # split: create work items from the ALREADY-APPROVED plan (no model re-call).
+    if args.action == "split":
+        if not plan_path.exists():
+            print("BLOCK: no plan yet. Run 'hssd overview analyze' first, review it, then split.",
+                  file=sys.stderr)
+            return 1
+        concerns = json.loads(plan_path.read_text(encoding="utf-8")).get("concerns", [])
+        if not concerns:
+            print("BLOCK: the saved plan has no concerns to split.", file=sys.stderr)
+            return 1
+        n = _create_work_items(project, concerns)
+        _log(project, "overview split", f"created={n}")
+        print(f"OK: created {n} work item(s) from the approved plan. Review with 'hssd work list'.")
+        return 0
+
+    # analyze: understand the brief, propose a decomposition, SAVE the plan, but create nothing.
     if not ov.exists():
         print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
         return 1
     text = ov.read_text(encoding="utf-8")
-    mode = "SPLIT CONCERNS" if args.split_concerns else "ANALYZE"
-    out = _run_role("product-analyst", f"{mode} for this overview:\n\n{text}", expect_json=True)
+    out = _run_role(
+        "product-analyst",
+        "Analyze this project brief. Return JSON with: 'analysis' (your understanding + a short "
+        "plan), 'concerns' (a list of {title, type} work items the brief decomposes into), and "
+        f"'technologies' (a list).\n\n{text}",
+        expect_json=True,
+    )
     try:
         data = json.loads(out)
     except json.JSONDecodeError:
         print("BLOCK: analyst did not return valid JSON:\n" + out, file=sys.stderr)
         return 1
 
-    if args.split_concerns:
-        concerns = data.get("concerns", [])
-        con = _pm(project)
-        base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
-        for i, c in enumerate(concerns, start=1):
-            con.execute(
-                "INSERT INTO work_items(id, title, type, status, created_at) VALUES(?,?,?,'open',?)",
-                (f"LOC-{base + i}", c.get("title", "(untitled)"), c.get("type", "feature"),
-                 datetime.datetime.now(datetime.timezone.utc).isoformat()),
-            )
-        con.commit()
-        _log(project, "overview analyze", f"split-concerns={len(concerns)}")
-        print(f"OK: created {len(concerns)} work item(s). Review with 'hssd work list'.")
-    else:
-        print(data.get("analysis", ""))
-        _log(project, "overview analyze", "analyze")
+    plan_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    concerns = _print_plan(data)
+    _log(project, "overview analyze", f"plan saved (concerns={len(concerns)})")
 
-    _recommend_templates(data.get("technologies", []))
+    if args.split_concerns:  # one-shot: analyze + create immediately (from this same plan)
+        n = _create_work_items(project, concerns)
+        _log(project, "overview split", f"created={n} (one-shot)")
+        print(f"\nOK: created {n} work item(s). Review with 'hssd work list'.")
+    elif concerns:
+        print("\n→ Agree with the plan? Create the tasks with:  hssd overview split")
     return 0
 
 
@@ -556,7 +602,8 @@ def cmd_update(args: argparse.Namespace) -> int:
         print(f"harness-studio {version} — not a git checkout here; nothing to pull.", file=sys.stderr)
         return 1
     res = subprocess.run(
-        ["git", "-C", str(PKG_ROOT), "pull", "--ff-only"], capture_output=True, text=True, check=False
+        ["git", "-C", str(PKG_ROOT), "pull", "--ff-only"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     print((res.stdout or res.stderr).strip())
     new = (PKG_ROOT / "VERSION").read_text(encoding="utf-8").strip() if (PKG_ROOT / "VERSION").exists() else version
@@ -709,10 +756,11 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--into", default=None, help="target project dir (default: cwd)")
     pt.set_defaults(func=cmd_template)
 
-    po = sub.add_parser("overview", help="register/analyze the project overview")
-    po.add_argument("action", choices=["add", "analyze"])
+    po = sub.add_parser("overview", help="register/analyze the project overview, then split into work items")
+    po.add_argument("action", choices=["add", "analyze", "split"])
     po.add_argument("file", nargs="?")
-    po.add_argument("--split-concerns", action="store_true", help="decompose into work items")
+    po.add_argument("--split-concerns", action="store_true",
+                    help="one-shot: analyze AND create the work items (skips the review gate)")
     po.set_defaults(func=cmd_overview)
 
     pw = sub.add_parser("work", help="work items via the PM Port (local SQLite or synced PM)")
