@@ -935,11 +935,11 @@ def cmd_engage(args: argparse.Namespace) -> int:
     """The engagement loop: 6 phases, P4 is the goal-condition (loop-until-dry)."""
     project = Path(".").resolve()
     con = _pm(project)
-    row = con.execute("SELECT title, status FROM work_items WHERE id=?", (args.id,)).fetchone()
+    row = con.execute("SELECT title, status, lane FROM work_items WHERE id=?", (args.id,)).fetchone()
     if not row:
         print(f"BLOCK: {args.id} not found", file=sys.stderr)
         return 1
-    title, status = row
+    title, status, lane = row
     if status != "in-progress" and not args.force:
         print(f"BLOCK: {args.id} is '{status}' — claim it first (hssd work claim {args.id})", file=sys.stderr)
         return 1
@@ -961,7 +961,23 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage answers", f"{args.id} <- {args.answers}")
         print(f"  recorded answers from {args.answers} -> {assumptions_file}")
 
-    base_ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)"
+    # Type-aware acceptance: governance/narrative deliverables are accepted by a rubric, code by tests.
+    if (lane or "") == "standing":
+        accept = (
+            "## Acceptance mode: RUBRIC (governance/narrative deliverable, lane=standing)\n"
+            "Acceptance is by rubric, NOT deterministic automated tests. Do NOT block because an item "
+            "'cannot be expressed as a deterministic/automated test' — that is expected and fine for a "
+            "narrative artifact. Require instead a clear, reviewer-checkable rubric: enumerate the "
+            "required elements, each with an objective presence check and a stated quality bar; a human "
+            "or LLM reviewer applies it."
+        )
+    else:
+        accept = (
+            "## Acceptance mode: TESTS (code deliverable, lane=feature)\n"
+            "Acceptance is by deterministic, executable tests. Any guarantee/atomicity/concurrency "
+            "requirement MUST become a stress test."
+        )
+    base_ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)\n\n{accept}"
 
     def current_ctx() -> str:  # re-read assumptions each call so recorded answers take effect
         c = base_ctx
