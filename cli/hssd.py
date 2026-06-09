@@ -934,7 +934,12 @@ def cmd_engage(args: argparse.Namespace) -> int:
         if args.auto:
             print(f"  ✓ {label} (auto-approved)")
             return True
-        return input(f"  ⏸ {label} — approve? [y/N] ").strip().lower() == "y"
+        try:
+            return input(f"  ⏸ {label} — approve? [y/N] ").strip().lower() == "y"
+        except EOFError:  # run headless (no terminal): don't bypass a human gate, stop cleanly
+            print(f"  ⏸ {label} needs a human. Run `hssd engage {args.id}` in a terminal, "
+                  "or pass --auto to skip gates (testing only).", file=sys.stderr)
+            return False
 
     print(f"▶ engage {args.id} · {title}")
     print("P0 Intake"); run("product-analyst")
@@ -981,6 +986,14 @@ def cmd_engage(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Force UTF-8 on output so glyphs (▶ ✓ ↻ ·) don't crash on Windows when stdout is a pipe
+    # (the default there is cp1252, which can't encode them — and mangles even '·' to '�').
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
+
     p = argparse.ArgumentParser(prog="hssd", description="Harness Studio CLI (skeleton)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
