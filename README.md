@@ -164,6 +164,8 @@ Research preview. The full flow is implemented and its orchestration verified en
 
 This kit is meant to be used, tested, and improved. See [`CONTRIBUTING.md`](CONTRIBUTING.md). The evolution rule: every escaped defect becomes a new guard — *fix the harness, not just the code.*
 
+> **Git LFS:** binary assets (`presentation/`, `assets/`) are tracked with [Git LFS](https://git-lfs.com). Install `git-lfs` before cloning (`git lfs install`); if you cloned without it, run `git lfs pull` to fetch the real files instead of pointers.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
