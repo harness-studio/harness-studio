@@ -36,11 +36,9 @@ These are wired into `.claude/commands/` — the user can type them, or you can 
 
 ## Examples
 
-- "register our blessed templates" →
-  ```bash
-  hssd template add --name frontend --from=https://github.com/harness-studio/hssd-template-vite-react-ts --tech react,typescript
-  hssd template add --name backend  --from=https://github.com/harness-studio/hssd-template-fastapi-sqlite --tech python,fastapi
-  ```
+- "register a template I trust (not one of the blessed ones)" →
+  `hssd template add --name my-django --from=https://github.com/acme/django-template --tech python,django`
+  (the blessed templates are already in `hssd template list` — don't re-add them; `add` refuses an already-known URL)
 - "what's on the backlog?" → `hssd work list`
 - "let's plan the project from the brief" → `hssd overview add docs/brief.md` then `hssd overview analyze` (review the plan with the user, then `hssd overview split`)
 - "how much time/tokens have we spent?" → `hssd stats`

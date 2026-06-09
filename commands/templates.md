@@ -1,14 +1,13 @@
 ---
-description: List Harness Studio templates, or register the blessed ones
-argument-hint: [list | add-blessed]
+description: List Harness Studio templates, or register/remove your own
+argument-hint: [list | add <name> <git-url> [tech] | rm <name>]
 ---
 Request: $ARGUMENTS
 
-- empty or `list` → run `hssd template list` and show the catalog (blessed + my registered templates).
-- `add-blessed`  → register the two official templates:
-  ```bash
-  hssd template add --name frontend --from=https://github.com/harness-studio/hssd-template-vite-react-ts --tech react,typescript
-  hssd template add --name backend  --from=https://github.com/harness-studio/hssd-template-fastapi-sqlite --tech python,fastapi
-  ```
+- empty or `list` → `hssd template list` (blessed catalog + my registered templates).
+- `add <name> <git-url> [tech]` → register a template I trust that is **not already listed**:
+  `hssd template add --name <name> --from=<git-url> --tech <a,b>`
+  (The blessed templates are already in the list — do **not** re-register them; `add` will refuse a URL that's already known.)
+- `rm <name>` → `hssd template rm --name <name>` (removes one of my registered templates).
 
-Any git URL also works: `hssd template import --from=<git-url>` (into this repo) or `hssd new <name> --from=<git-url>` (fresh project). Whether to actually apply a template is an architecture (P2) decision.
+To actually use a template: `hssd template import --from=<git-url>` (into this repo) or `hssd new <name> --from=<git-url>`. Any git URL works. Whether to apply one is an architecture (P2) decision.

@@ -361,16 +361,30 @@ def cmd_template(args: argparse.Namespace) -> int:
         if not (args.name and args.from_git):
             print("BLOCK: add needs --name and --from=<git-url>", file=sys.stderr)
             return 1
-        cat = _load_user_catalog()
-        if any(e.get("url") == args.from_git for e in cat):
-            print(f"already registered: {args.from_git}")
+        known = {e.get("url"): e.get("source", "user") for e in _full_catalog()}
+        if args.from_git in known:  # dedup against the FULL catalog (blessed + user)
+            print(f"already known ({known[args.from_git]} catalog) — no need to re-register: {args.from_git}")
             return 0
+        cat = _load_user_catalog()
         tech = [t.strip() for t in (args.tech or "").split(",") if t.strip()]
         cat.append({"name": args.name, "url": args.from_git, "tech": tech})
         p = _user_catalog_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(cat, indent=2), encoding="utf-8")
         print(f"OK: registered '{args.name}' -> {args.from_git}\n  use it: hssd new <name> --from={args.from_git}")
+        return 0
+
+    if args.action == "rm":  # remove one of YOUR registered templates (blessed ones aren't removable)
+        if not (args.name or args.from_git):
+            print("BLOCK: rm needs --name or --from=<git-url>", file=sys.stderr)
+            return 1
+        cat = _load_user_catalog()
+        kept = [e for e in cat if e.get("name") != args.name and e.get("url") != args.from_git]
+        if len(kept) == len(cat):
+            print(f"not in your registry: {args.name or args.from_git}")
+            return 0
+        _user_catalog_path().write_text(json.dumps(kept, indent=2), encoding="utf-8")
+        print(f"OK: removed {len(cat) - len(kept)} entry(ies) from your registry")
         return 0
 
     # import: clone the template repo, then compose it into the project (additive merge).
@@ -980,9 +994,9 @@ def main(argv: list[str] | None = None) -> int:
     pi.set_defaults(func=cmd_init)
 
     pt = sub.add_parser("template", help="list / import / register templates (blessed catalog + your own; any git URL)")
-    pt.add_argument("action", choices=["list", "import", "add"])
-    pt.add_argument("--from", dest="from_git", default=None, help="git URL (to import, or to register with add)")
-    pt.add_argument("--name", default=None, help="name when registering a template (add)")
+    pt.add_argument("action", choices=["list", "import", "add", "rm"])
+    pt.add_argument("--from", dest="from_git", default=None, help="git URL (to import, or to register/remove)")
+    pt.add_argument("--name", default=None, help="name when registering (add) or removing (rm)")
     pt.add_argument("--tech", default=None, help="comma-separated tech tags when registering (add)")
     pt.add_argument("--into", default=None, help="target project dir for import (default: cwd)")
     pt.set_defaults(func=cmd_template)
