@@ -1,0 +1,27 @@
+# install-target: .pre-commit-config.yaml
+# The pre-commit gate. Blocks bad commits before they happen — the harness, enforced.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff           # lint incl. UP (no Optional), C90 (complexity), S (security)
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks       # security-first: never leak ENV/secrets
+
+  - repo: local
+    hooks:
+      - id: no-commit-to-protected
+        name: block direct commits to protected branches
+        entry: bash -c 'b=$(git rev-parse --abbrev-ref HEAD); case "$b" in main|develop|homolog) echo "BLOCK: no direct commits to $b — use a feature branch"; exit 1;; esac'
+        language: system
+        pass_filenames: false
+      - id: branch-linked-to-task
+        name: feature branch must link a work item (harness/<source>-<id>-<slug>)
+        entry: bash -c 'b=$(git rev-parse --abbrev-ref HEAD); echo "$b" | grep -Eq "^harness/[a-z]+-[0-9]+-" || { echo "BLOCK: branch $b is not linked to a work item"; exit 1; }'
+        language: system
+        pass_filenames: false

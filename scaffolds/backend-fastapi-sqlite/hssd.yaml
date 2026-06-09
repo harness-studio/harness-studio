@@ -1,0 +1,5 @@
+# This repo is a Harness Studio TEMPLATE, not a managed project.
+# hssd assists here (standards, structure, gates) but does NOT run team/engagement mode.
+type: template
+stack: backend-fastapi-sqlite
+tech: [python, fastapi, sqlite]

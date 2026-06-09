@@ -1,0 +1,10 @@
+{
+  "// note": "Harness Studio configures VS Code using EXISTING extensions — it ships no custom plugin.",
+  "// install-target": ".vscode/extensions.json",
+  "recommendations": [
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy"
+  ]
+}

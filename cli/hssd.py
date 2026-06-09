@@ -1,0 +1,613 @@
+#!/usr/bin/env python3
+"""hssd — Harness Studio CLI (skeleton).
+
+Long name: harness-sd. Short alias: hssd. Targets Python 3.12 in production;
+uses only the stdlib so the skeleton runs anywhere.
+
+Implemented (skeleton):
+  hssd new <name> [--template=<t>] [--from=<git-url>]
+  hssd template list | import --from=<git-url>
+  hssd log [--verbose]
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+PKG_ROOT = Path(__file__).resolve().parent.parent  # the harness-studio package
+SCAFFOLDS = PKG_ROOT / "scaffolds"
+TEMPLATES = PKG_ROOT / "templates"
+AGENTS = PKG_ROOT / "agents"
+
+# Template repos can't ship dotfiles, so they're stored under dotfiles/ and renamed here.
+DOTFILE_MAP = {
+    "vscode-extensions.json": ".vscode/extensions.json",
+    "vscode-settings.json": ".vscode/settings.json",
+    "pre-commit-config.yaml": ".pre-commit-config.yaml",
+}
+
+
+def _log(project: Path, action: str, detail: str) -> None:
+    """Append to the project's session log (the audit trail / free AI log)."""
+    logs = project / ".harness" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with (logs / "session.log").open("a", encoding="utf-8") as fh:
+        fh.write(f"{ts}\t{action}\t{detail}\n")
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    dest = Path(args.name).resolve()
+    if dest.exists() and any(dest.iterdir()):
+        print(f"BLOCK: {dest} exists and is not empty", file=sys.stderr)
+        return 1
+
+    # 1. Materialize the template (from git, or a local blessed scaffold).
+    if args.from_git:
+        subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(dest)], check=True)
+        shutil.rmtree(dest / ".git", ignore_errors=True)
+    else:
+        src = SCAFFOLDS / args.template
+        if not src.exists():
+            print(f"BLOCK: unknown template '{args.template}'", file=sys.stderr)
+            return 1
+        shutil.copytree(src, dest)
+
+    # 2. Rename dotfiles (dotfiles/<x> -> the real dotfile path).
+    df = dest / "dotfiles"
+    if df.exists():
+        for f in df.iterdir():
+            target = dest / DOTFILE_MAP.get(f.name, f.name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(target))
+        df.rmdir()
+
+    # 3. Governance from minute zero (ADR + AI log from the package templates).
+    docs = dest / "docs"
+    docs.mkdir(exist_ok=True)
+    for name in ("ADR.md", "AI_LOG.md"):
+        tpl = TEMPLATES / name
+        if tpl.exists() and not (docs / name).exists():
+            shutil.copy(tpl, docs / name)
+
+    # 4. This is a managed PROJECT (not a template) -> type: project.
+    (dest / "hssd.yaml").write_text(f"type: project\nstack: {args.template}\n", encoding="utf-8")
+
+    # 5. Local PM spine + runtime dir (gitignored), then git on `main`.
+    harness = dest / ".harness"
+    harness.mkdir(exist_ok=True)
+    (harness / ".gitignore").write_text("*\n", encoding="utf-8")
+    _pm(dest).close()  # initialize the local PM spine (work_items table)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(dest)], check=False)
+
+    _log(dest, "new", f"template={args.template} from={args.from_git or 'local'}")
+    print(f"OK: created {dest} (type: project, stack: {args.template})")
+    return 0
+
+
+def _union_lines(target: Path, incoming: str) -> None:
+    """Additive union of lines (e.g., .gitignore)."""
+    existing = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
+    have = set(existing)
+    additions = [ln for ln in incoming.splitlines() if ln.strip() and ln not in have]
+    if additions:
+        target.write_text("\n".join(existing + additions) + "\n", encoding="utf-8")
+
+
+def _deep_merge(base: object, incoming: object, conflicts: list[str], path: str) -> object:
+    """Dicts merge, lists union, equal scalars keep; scalar conflicts kept (always-first) + recorded."""
+    if isinstance(base, dict) and isinstance(incoming, dict):
+        for k, v in incoming.items():
+            base[k] = _deep_merge(base[k], v, conflicts, f"{path}.{k}") if k in base else v
+        return base
+    if isinstance(base, list) and isinstance(incoming, list):
+        return base + [x for x in incoming if x not in base]
+    if base == incoming:
+        return base
+    conflicts.append(f"{path}: kept {base!r} over {incoming!r}")
+    return base
+
+
+def _merge_json(target: Path, incoming_text: str, conflicts: list[str]) -> None:
+    incoming = json.loads(incoming_text)
+    merged = (
+        _deep_merge(json.loads(target.read_text(encoding="utf-8")), incoming, conflicts, target.name)
+        if target.exists()
+        else incoming
+    )
+    target.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+
+
+def cmd_template(args: argparse.Namespace) -> int:
+    if args.action == "list":
+        if SCAFFOLDS.exists():
+            for p in sorted(SCAFFOLDS.iterdir()):
+                if p.is_dir():
+                    print(p.name)
+        return 0
+
+    # import: materialize the incoming template, then compose into the project.
+    project = Path(args.into or ".").resolve()
+    tmp = Path(tempfile.mkdtemp())
+    incoming_root = tmp / "incoming"
+    if args.from_git:
+        subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(incoming_root)], check=True)
+        shutil.rmtree(incoming_root / ".git", ignore_errors=True)
+    elif args.template:
+        shutil.copytree(SCAFFOLDS / args.template, incoming_root)
+    else:
+        print("BLOCK: import needs --from=<git-url> or --template=<name>", file=sys.stderr)
+        return 1
+
+    conflicts: list[str] = []
+    for f in sorted(incoming_root.rglob("*")):
+        if f.is_dir():
+            continue
+        rel = f.relative_to(incoming_root)
+        if rel.parts and rel.parts[0] == "dotfiles":
+            target = project / DOTFILE_MAP.get(rel.name, rel.name)
+        else:
+            target = project / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = f.read_text(encoding="utf-8", errors="replace")
+        if target.name == ".gitignore":
+            _union_lines(target, text)                      # additive
+        elif target.suffix == ".json":
+            _merge_json(target, text, conflicts)            # deep merge / list union
+        elif not target.exists():
+            shutil.copy(f, target)                          # create-if-absent (default)
+        else:
+            conflicts.append(f"{target.name}: kept existing (text file, not auto-merged)")
+
+    policy = "prompt"
+    hy = project / "hssd.yaml"
+    if hy.exists():
+        for line in hy.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("conflict_policy:"):
+                policy = line.split(":", 1)[1].strip()
+    _log(project, "template import", f"src={args.from_git or args.template} conflicts={len(conflicts)}")
+    if conflicts:
+        print(f"composed with {len(conflicts)} conflict(s) [policy={policy}]:")
+        for c in conflicts:
+            print(f"  - {c}")
+    else:
+        print("composed cleanly (additive merge, no conflicts)")
+    shutil.rmtree(tmp, ignore_errors=True)
+    return 0
+
+
+def cmd_log(args: argparse.Namespace) -> int:
+    logf = Path(".harness/logs/session.log")
+    if not logf.exists():
+        print("(no session log yet)")
+        return 0
+    print(logf.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def _pm(project: Path) -> sqlite3.Connection:
+    """Open (and init) the local PM spine. The PM Port's default backend."""
+    path = project / ".harness" / "pm.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("PRAGMA busy_timeout=5000")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS work_items ("
+        "id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'feature', "
+        "status TEXT NOT NULL DEFAULT 'open', assignee TEXT, branch TEXT, lane TEXT, "
+        "created_at TEXT NOT NULL, source TEXT, fingerprint TEXT)"
+    )
+    for col in ("source TEXT", "fingerprint TEXT"):  # upgrade older DBs in place
+        try:
+            con.execute(f"ALTER TABLE work_items ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
+    con.commit()
+    return con
+
+
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40]
+
+
+def cmd_work(args: argparse.Namespace) -> int:
+    project = Path(".").resolve()
+    con = _pm(project)
+
+    if args.action == "add":
+        if not args.title:
+            print("BLOCK: --title required", file=sys.stderr)
+            return 1
+        n = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] + 1
+        wid = f"LOC-{n}"
+        con.execute(
+            "INSERT INTO work_items(id, title, type, status, created_at) VALUES(?,?,?,'open',?)",
+            (wid, args.title, args.type, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+        con.commit()
+        _log(project, "work add", wid)
+        print(f"OK: {wid} · {args.title}")
+        return 0
+
+    if args.action == "list":
+        q = "SELECT id, status, type, assignee, title FROM work_items"
+        params: tuple[str, ...] = ()
+        if args.status:
+            q += " WHERE status=?"
+            params = (args.status,)
+        rows = con.execute(q + " ORDER BY id", params).fetchall()
+        if not rows:
+            print("(no work items)")
+            return 0
+        for r in rows:
+            print(f"{r[0]:<8} {r[1]:<12} {r[2]:<9} {(r[3] or '-'):<10} {r[4]}")
+        return 0
+
+    if args.action == "show":
+        r = con.execute("SELECT * FROM work_items WHERE id=?", (args.id,)).fetchone()
+        print(r if r else f"{args.id} not found")
+        return 0
+
+    # claim — atomic compare-and-swap on status (race-safe on the local spine)
+    row = con.execute("SELECT title, status FROM work_items WHERE id=?", (args.id,)).fetchone()
+    if not row:
+        print(f"BLOCK: {args.id} not found", file=sys.stderr)
+        return 1
+    branch = f"harness/local-{args.id.lower()}-{_slug(row[0])}"
+    cur = con.execute(
+        "UPDATE work_items SET status='in-progress', assignee=?, branch=? WHERE id=? AND status='open'",
+        (args.who, branch, args.id),
+    )
+    con.commit()
+    if cur.rowcount == 0:
+        print(f"BLOCK: {args.id} already claimed (status={row[1]})", file=sys.stderr)
+        return 1
+    _log(project, "work claim", f"{args.id} -> {branch}")
+    subprocess.run(["git", "checkout", "-q", "-b", branch], check=False)
+    print(f"OK: claimed {args.id} · branch {branch}")
+    return 0
+
+
+def _read_agent(role: str) -> str:
+    """Load a subagent definition (project override, else the package)."""
+    for base in (Path(".claude/agents"), AGENTS):
+        f = base / f"{role}.md"
+        if f.exists():
+            return f.read_text(encoding="utf-8")
+    return f"You are the {role}."
+
+
+# Role -> blessed skills it loads (the CLI does the skill routing / scoping).
+ROLE_SKILLS = {
+    "backend-dev": ["python", "fastapi"],
+    "frontend-dev": ["typescript"],
+    "architect": ["python", "fastapi", "typescript"],
+}
+
+
+def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
+    """Invoke a role as a focused agent. Backend: 'claude' (Claude Code) or 'mock' (tests).
+
+    This is what makes skills + subagents 'work': the role's system prompt and its scoped
+    skills are composed, then handed to the AI runtime.
+    """
+    backend = os.environ.get("HSSD_AGENT_BACKEND", "claude")
+    parts = [_read_agent(role)]
+    for skill in ROLE_SKILLS.get(role, []):
+        sk = AGENTS.parent / "skills" / skill / "SKILL.md"
+        if sk.exists():
+            parts.append(f"\n# Skill: {skill}\n{sk.read_text(encoding='utf-8')}")
+    parts.append(f"\n# Task\n{prompt}")
+    if expect_json:
+        parts.append("\n\nRespond with ONLY valid JSON, no prose.")
+    composed = "\n".join(parts)
+
+    if backend == "mock":
+        mf = os.environ.get("HSSD_MOCK_FILE")
+        if mf and Path(mf).exists():
+            return json.loads(Path(mf).read_text(encoding="utf-8")).get(role, "")
+        return os.environ.get("HSSD_MOCK_OUTPUT", "")
+    res = subprocess.run(["claude", "-p", composed], capture_output=True, text=True, check=False)
+    return res.stdout.strip()
+
+
+def _available_templates() -> list[tuple[str, list[str]]]:
+    """Local scaffolds and the tech tags they declare in hssd.yaml (`tech: [...]`)."""
+    out: list[tuple[str, list[str]]] = []
+    if SCAFFOLDS.exists():
+        for d in sorted(SCAFFOLDS.iterdir()):
+            if not d.is_dir():
+                continue
+            tech: list[str] = []
+            hy = d / "hssd.yaml"
+            if hy.exists():
+                for line in hy.read_text(encoding="utf-8").splitlines():
+                    m = re.match(r"\s*tech:\s*\[(.*)\]", line)
+                    if m:
+                        tech = [t.strip() for t in m.group(1).split(",") if t.strip()]
+            out.append((d.name, tech))
+    return out
+
+
+def _recommend_templates(techs: list[str]) -> None:
+    """Suggest blessed templates for detected tech; otherwise note the agents build directly."""
+    if not techs:
+        return
+    print(f"\nDetected technologies: {', '.join(techs)}")
+    techset = {t.lower() for t in techs}
+    covered: set[str] = set()
+    matches: list[tuple[str, list[str]]] = []
+    for name, tech in _available_templates():
+        hit = techset & {t.lower() for t in tech}
+        if hit:
+            matches.append((name, sorted(hit)))
+            covered |= hit
+    if matches:
+        print("Matching blessed templates (optional):")
+        for name, hit in matches:
+            print(f"  - {name}  (covers: {', '.join(hit)})")
+        print("  -> use one: hssd new --from=<repo>  |  hssd template import --from=<repo>")
+    uncovered = sorted(techset - covered)
+    if uncovered:
+        print(f"No blessed template for: {', '.join(uncovered)}")
+        print("  -> the agents build these directly using the skills (no template needed).")
+
+
+def cmd_overview(args: argparse.Namespace) -> int:
+    project = Path(".").resolve()
+    ov = project / ".harness" / "overview.md"
+
+    if args.action == "add":
+        src = Path(args.file) if args.file else None
+        if not src or not src.exists():
+            print(f"BLOCK: file not found: {args.file}", file=sys.stderr)
+            return 1
+        ov.parent.mkdir(parents=True, exist_ok=True)
+        ov.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        _log(project, "overview add", str(args.file))
+        print(f"OK: overview stored ({args.file})")
+        return 0
+
+    if not ov.exists():
+        print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
+        return 1
+    text = ov.read_text(encoding="utf-8")
+    mode = "SPLIT CONCERNS" if args.split_concerns else "ANALYZE"
+    out = _run_role("product-analyst", f"{mode} for this overview:\n\n{text}", expect_json=True)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        print("BLOCK: analyst did not return valid JSON:\n" + out, file=sys.stderr)
+        return 1
+
+    if args.split_concerns:
+        concerns = data.get("concerns", [])
+        con = _pm(project)
+        base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+        for i, c in enumerate(concerns, start=1):
+            con.execute(
+                "INSERT INTO work_items(id, title, type, status, created_at) VALUES(?,?,?,'open',?)",
+                (f"LOC-{base + i}", c.get("title", "(untitled)"), c.get("type", "feature"),
+                 datetime.datetime.now(datetime.timezone.utc).isoformat()),
+            )
+        con.commit()
+        _log(project, "overview analyze", f"split-concerns={len(concerns)}")
+        print(f"OK: created {len(concerns)} work item(s). Review with 'hssd work list'.")
+    else:
+        print(data.get("analysis", ""))
+        _log(project, "overview analyze", "analyze")
+
+    _recommend_templates(data.get("technologies", []))
+    return 0
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Self-update: pull the framework repo (a separate git checkout) and report the version."""
+    version = (PKG_ROOT / "VERSION").read_text(encoding="utf-8").strip() if (PKG_ROOT / "VERSION").exists() else "unknown"
+    if args.check:
+        print(f"harness-studio {version}")
+        return 0
+    if not (PKG_ROOT / ".git").exists():
+        print(f"harness-studio {version} — not a git checkout here; nothing to pull.", file=sys.stderr)
+        return 1
+    res = subprocess.run(
+        ["git", "-C", str(PKG_ROOT), "pull", "--ff-only"], capture_output=True, text=True, check=False
+    )
+    print((res.stdout or res.stderr).strip())
+    new = (PKG_ROOT / "VERSION").read_text(encoding="utf-8").strip() if (PKG_ROOT / "VERSION").exists() else version
+    print(f"harness-studio now at {new}")
+    return res.returncode
+
+
+def cmd_janitor(args: argparse.Namespace) -> int:
+    """The discovery heartbeat: audit -> dedup by fingerprint -> file work items."""
+    project = Path(".").resolve()
+    con = _pm(project)
+    out = _run_role("janitor", "Audit this codebase and report deduped findings.", expect_json=True)
+    try:
+        findings = json.loads(out)
+    except json.JSONDecodeError:
+        print("BLOCK: janitor did not return valid JSON:\n" + out, file=sys.stderr)
+        return 1
+
+    existing = {
+        r[0] for r in con.execute("SELECT fingerprint FROM work_items WHERE fingerprint IS NOT NULL")
+    }
+    base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+    created = skipped = 0
+    for f in findings:
+        fp = f.get("fingerprint") or _slug(f.get("title", ""))
+        if fp in existing:
+            skipped += 1
+            continue
+        base += 1
+        con.execute(
+            "INSERT INTO work_items(id, title, type, status, created_at, source, fingerprint) "
+            "VALUES(?,?,?,'open',?, 'janitor', ?)",
+            (f"LOC-{base}", f.get("title", "(finding)"), f.get("type", "tech-debt"),
+             datetime.datetime.now(datetime.timezone.utc).isoformat(), fp),
+        )
+        existing.add(fp)
+        created += 1
+    con.commit()
+    _log(project, "janitor", f"created={created} deduped={skipped}")
+    print(f"janitor: {created} new work item(s), {skipped} deduped. Review with 'hssd work list'.")
+    return 0
+
+
+def _gate_ok(out: str) -> bool:
+    try:
+        return json.loads(out).get("verdict") == "PASS"
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
+def cmd_engage(args: argparse.Namespace) -> int:
+    """The engagement loop: 6 phases, P4 is the goal-condition (loop-until-dry)."""
+    project = Path(".").resolve()
+    con = _pm(project)
+    row = con.execute("SELECT title, status FROM work_items WHERE id=?", (args.id,)).fetchone()
+    if not row:
+        print(f"BLOCK: {args.id} not found", file=sys.stderr)
+        return 1
+    title, status = row
+    if status != "in-progress" and not args.force:
+        print(f"BLOCK: {args.id} is '{status}' — claim it first (hssd work claim {args.id})", file=sys.stderr)
+        return 1
+
+    st = project / ".harness" / "engagements" / args.id  # durable memory for this loop
+    st.mkdir(parents=True, exist_ok=True)
+    ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)"
+
+    def run(role: str, expect_json: bool = False) -> str:
+        out = _run_role(role, ctx, expect_json=expect_json)
+        (st / f"{role}.out").write_text(out, encoding="utf-8")
+        _log(project, "engage", f"{args.id} {role}")
+        return out
+
+    def gate(role: str, label: str) -> bool:
+        out = run(role, expect_json=True)
+        ok = _gate_ok(out)
+        print(f"  {'✓' if ok else '⏸'} {label} {'PASS' if ok else 'BLOCK'}")
+        if not ok:
+            print(f"    {out}")
+        return ok
+
+    def human(label: str) -> bool:
+        if args.auto:
+            print(f"  ✓ {label} (auto-approved)")
+            return True
+        return input(f"  ⏸ {label} — approve? [y/N] ").strip().lower() == "y"
+
+    print(f"▶ engage {args.id} · {title}")
+    print("P0 Intake"); run("product-analyst")
+    if not gate("definition-skeptic", "Definition Skeptic"):
+        return 2
+    print("P1 Stories & AC"); run("story-writer")
+    if not gate("ac-adversary", "AC Adversary"):
+        return 2
+    print("P2 Architecture"); run("architect")
+    if not gate("architecture-adversary", "Architecture Adversary"):
+        return 2
+    if not human("SPEC LOCK (no code before this)"):
+        print("Stopped at Spec Lock."); return 0
+
+    # P3 + P4: the goal loop — iterate until the adversarial checkers are dry.
+    checkers = [
+        ("independent-verifier", "Independent Verifier"),
+        ("completion-challenger", "Completion Challenger"),
+        ("test-adversary", "Test Adversary"),
+        ("regression-hunter", "Regression Hunter"),  # always on — integrity is non-negotiable
+    ]
+    # Security is mandatory for API/auth surfaces (STANDARDS §2); --no-security opts out for
+    # non-API work (the documented escape hatch).
+    if not args.no_security:
+        checkers.insert(0, ("security-adversary", "Security/Attack Adversary"))
+    dry = False
+    for attempt in range(1, args.max_iter + 1):
+        print(f"P3 Build (attempt {attempt})"); run("backend-dev"); run("frontend-dev")
+        print("P4 Verification")
+        blockers = [label for role, label in checkers if not gate(role, label)]
+        if not blockers:
+            print("  ✓ loop-until-dry: dry (all checkers PASS)"); dry = True; break
+        print(f"  ↻ blockers {blockers} → back to P3")
+    if not dry:
+        print(f"BLOCK: still failing after {args.max_iter} attempts.", file=sys.stderr); return 1
+
+    print("P5 Integration")
+    if not human("MERGE"):
+        print("Stopped before merge."); return 0
+    con.execute("UPDATE work_items SET status='done' WHERE id=?", (args.id,)); con.commit()
+    _log(project, "engage", f"{args.id} done")
+    print(f"✓ {args.id} delivered (status=done)")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="hssd", description="Harness Studio CLI (skeleton)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pn = sub.add_parser("new", help="create a project from a template")
+    pn.add_argument("name")
+    pn.add_argument("--template", default="backend-fastapi-sqlite")
+    pn.add_argument("--from", dest="from_git", default=None)
+    pn.set_defaults(func=cmd_new)
+
+    pt = sub.add_parser("template", help="manage templates")
+    pt.add_argument("action", choices=["list", "import"])
+    pt.add_argument("--from", dest="from_git", default=None)
+    pt.add_argument("--template", default=None, help="local scaffold name (for import without git)")
+    pt.add_argument("--into", default=None, help="target project dir (default: cwd)")
+    pt.set_defaults(func=cmd_template)
+
+    po = sub.add_parser("overview", help="register/analyze the project overview")
+    po.add_argument("action", choices=["add", "analyze"])
+    po.add_argument("file", nargs="?")
+    po.add_argument("--split-concerns", action="store_true", help="decompose into work items")
+    po.set_defaults(func=cmd_overview)
+
+    pw = sub.add_parser("work", help="work items via the PM Port (local SQLite or synced PM)")
+    pw.add_argument("action", choices=["add", "list", "show", "claim"])
+    pw.add_argument("id", nargs="?")
+    pw.add_argument("--title", default="")
+    pw.add_argument("--type", default="feature")
+    pw.add_argument("--status", default=None, help="filter for list (e.g. open)")
+    pw.add_argument("--as", dest="who", default="me")
+    pw.set_defaults(func=cmd_work)
+
+    pe = sub.add_parser("engage", help="run the 6-phase engagement loop on a work item")
+    pe.add_argument("id")
+    pe.add_argument("--auto", action="store_true", help="auto-approve human gates (testing)")
+    pe.add_argument("--force", action="store_true", help="run even if not claimed")
+    pe.add_argument("--max-iter", type=int, default=3, dest="max_iter")
+    pe.add_argument("--no-security", action="store_true", dest="no_security",
+                    help="skip the Security/Attack Adversary (non-API/auth work only)")
+    pe.set_defaults(func=cmd_engage)
+
+    pj = sub.add_parser("janitor", help="discovery heartbeat — audit + dedup + file work items")
+    pj.set_defaults(func=cmd_janitor)
+
+    pu = sub.add_parser("update", help="self-update the framework (git pull) / show version")
+    pu.add_argument("--check", action="store_true", help="just print the current version")
+    pu.set_defaults(func=cmd_update)
+
+    pl = sub.add_parser("log", help="show the session log")
+    pl.add_argument("--verbose", action="store_true")
+    pl.set_defaults(func=cmd_log)
+
+    args = p.parse_args(argv)
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

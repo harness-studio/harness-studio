@@ -1,0 +1,15 @@
+# .archon/workflows/janitor.yaml
+# The discovery heartbeat (LOOPS.md): a scheduled audit that files deduped work items,
+# which then feed the engagement loop. Worker = hssd; trigger = this schedule
+# (ARCHITECTURE.md: worker vs trigger — Claude Code/hssd doesn't run as a daemon).
+
+name: hssd-janitor
+description: Scheduled codebase-health audit -> deduped work items -> feeds the engagement loop.
+schedule: "0 9 * * 1"   # cron — your cadence (this is the "Friday cleaning", automated). Set yours.
+
+nodes:
+  - id: scan-and-file
+    bash: "hssd janitor"   # runs the janitor agent, dedups by fingerprint, inserts into the PM spine
+
+# Output: new `open` work items. A human triages them (hssd work list), or — once a class of issue
+# has earned it — an autonomous fast lane claims + engages them. Autonomy is earned, not switched on.

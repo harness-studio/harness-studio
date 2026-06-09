@@ -1,0 +1,89 @@
+# .archon/workflows/engagement.yaml
+# Harness Studio's 6-phase SOP as an Archon workflow (one work item: brief -> delivery).
+# Illustrative: node/field names follow Archon conventions — confirm exact schema at impl time.
+# Mechanism notes: P4 (adversarial debate) suits agent teams (interactive); the rest run as
+# subagents driven by Archon. Lanes: the "fast" lane skips design + most P4 adversaries.
+
+name: hssd-engagement
+description: Spec-driven, adversarial engagement on a single work item.
+
+nodes:
+  # ---- P0 INTAKE ----
+  - id: intake
+    agent: product-analyst
+    output_schema: problem_statement
+  - id: intake-skeptic                 # adversarial gate; its findings -> ADR assumptions
+    agent: definition-skeptic
+    depends_on: [intake]
+    output_schema: gate_result
+
+  # ---- P1 STORIES & ACCEPTANCE CRITERIA ----
+  - id: stories
+    agent: story-writer
+    depends_on: [intake-skeptic]
+    output_schema: stories
+  - id: ac-adversary                   # the most important gate: "done" becomes testable
+    agent: ac-adversary
+    depends_on: [stories]
+    output_schema: gate_result
+
+  # ---- P2 ARCHITECTURE -> SPEC LOCK ----
+  - id: design
+    agent: architect                   # proposes stack + design (ADR material)
+    depends_on: [ac-adversary]
+    output_schema: tech_design
+  - id: design-redteam                 # challenges it (robust, not convenient)
+    agent: architecture-adversary
+    depends_on: [design]
+    output_schema: gate_result
+  - id: spec-lock                      # HARD HUMAN GATE — no code before this passes
+    depends_on: [design-redteam]
+    interactive: true
+    prompt: "Approve the spec (problem + AC + ADR). Phase 3 cannot start until approved."
+
+  # ---- P3 BUILD (parallel slices, fresh context per iteration) ----
+  - id: impl-backend
+    agent: backend-dev
+    depends_on: [spec-lock]
+    loop: { until: VALIDATION_GREEN, fresh_context: true }
+  - id: impl-frontend
+    agent: frontend-dev
+    depends_on: [spec-lock]
+    loop: { until: VALIDATION_GREEN, fresh_context: true }
+
+  # ---- P4 VERIFICATION (adversarial fan-out; agent-team-friendly) ----
+  - id: verify-acs
+    agent: independent-verifier        # confirms each AC with executable evidence
+    depends_on: [impl-backend, impl-frontend]
+    output_schema: verification_report
+  - id: completion-challenge           # anti early-completion (always on)
+    agent: completion-challenger
+    depends_on: [impl-backend, impl-frontend]
+    output_schema: gate_result
+  - id: security-attack                # MANDATORY for API/auth surfaces
+    agent: security-adversary
+    depends_on: [impl-backend]
+    when: "exposes_api_or_auth()"
+    output_schema: gate_result
+  - id: test-adversary                 # break concurrency / wrong-reason-pass tests
+    agent: test-adversary
+    depends_on: [impl-backend, impl-frontend]
+    output_schema: gate_result
+  - id: regression-hunter              # "what does this break?" — full suite + callers
+    agent: regression-hunter
+    depends_on: [impl-backend, impl-frontend]
+    output_schema: gate_result
+  - id: synthesize                     # aggregate findings (Lead or a light synthesizer)
+    depends_on: [verify-acs, completion-challenge, security-attack, test-adversary, regression-hunter]
+    output_schema: synthesis
+    on_blockers: goto impl-backend     # loop-until-dry: any blocker -> back to P3
+
+  # ---- P5 INTEGRATION ----
+  - id: full-validation                # safety net: re-run all computational gates
+    bash: "make validate"
+    depends_on: [synthesize]
+  - id: open-pr                        # PR/MR linked to the work item (Lead or integrator step)
+    depends_on: [full-validation]
+  - id: merge-approval                 # human gate (production)
+    depends_on: [open-pr]
+    interactive: true

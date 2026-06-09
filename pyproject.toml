@@ -1,0 +1,21 @@
+[project]
+name = "harness-studio"
+version = "0.1.0"
+description = "Harness Studio — a governed, adversarial AI software-delivery framework (hssd CLI)."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+hssd = "cli.hssd:main"
+harness-sd = "cli.hssd:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cli"]
+
+# NOTE: the data dirs (agents/, skills/, templates/, scaffolds/, workflows/) resolve from the repo
+# in an EDITABLE install (the CLI finds them relative to its own file). Bundling them into a wheel
+# as package data (importlib.resources) is the productization step.

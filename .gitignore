@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+# Node
+node_modules/
+# Harness runtime / local state (never committed)
+.harness/
+# OS / editor
+.DS_Store
+Thumbs.db
