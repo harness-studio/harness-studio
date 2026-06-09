@@ -1289,8 +1289,13 @@ def cmd_engage(args: argparse.Namespace) -> int:
         return len(recs)
 
     def passing_gate(role: str, label: str, max_retry: int = 2) -> bool:
-        """Adversary gate that never dead-ends: on BLOCK it shows options + the recommended fix;
-        with --accept-recommended it records the recommended resolutions and retries (loop-forward)."""
+        """Adversary gate that never dead-ends. On BLOCK it shows options + the recommended fix.
+        With --accept-recommended it records the recommended resolutions and retries (loop-forward);
+        when retries are EXHAUSTED it still does not stall — it carries the accumulated assumptions
+        forward to the Spec Lock human gate (the natural arbiter), flagging that they need sign-off.
+        Rationale (field-learned on LOC-7): a single story pulled from a multi-story system may never
+        fully converge in isolation — the skeptic keeps surfacing real cross-story dependencies. That
+        is signal for the human reviewing the locked spec, not a reason to dead-end the loop."""
         for attempt in range(max_retry + 1):
             out = run(role, expect_json=True)
             try:
@@ -1302,11 +1307,17 @@ def cmd_engage(args: argparse.Namespace) -> int:
             if ok:
                 return True
             findings = _show_findings(data if isinstance(data, dict) else {})
-            if args.accept_recommended and attempt < max_retry and findings:
+            if args.accept_recommended and findings:
                 n = _accept_recommended(findings)
-                if n:
+                if n and attempt < max_retry:
                     print(f"    ↻ accepted {n} recommended resolution(s) → retrying {label}")
                     continue
+                if n:  # retries exhausted but autonomy is on: loop-forward, never stall
+                    print(f"    ⚠ {label} still BLOCK after {max_retry + 1} rounds — carried "
+                          f"{n} more assumption(s) forward (convergence by exhaustion). They need "
+                          f"human sign-off at SPEC LOCK; full trail in "
+                          f".harness/engagements/{args.id}/assumptions.md")
+                    return True
             print(f"    → resolve & retry: write answers to a file then "
                   f"`hssd engage {args.id} --answers <file>`, or rerun with `--accept-recommended` "
                   f"(auto-take the recommended options). Full output in "
