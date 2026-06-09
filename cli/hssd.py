@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 PKG_ROOT = Path(__file__).resolve().parent.parent  # the harness-studio package
@@ -112,6 +113,53 @@ def _log(project: Path, action: str, detail: str) -> None:
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with (logs / "session.log").open("a", encoding="utf-8") as fh:
         fh.write(f"{ts}\t{action}\t{detail}\n")
+
+
+def _metric(record: dict) -> None:
+    """Append one structured per-AI-call metric (time, tokens, cost) for analytics + the AI log."""
+    logs = Path(".harness") / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), **record}
+    with (logs / "metrics.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def _load_metrics(project: Path) -> list[dict]:
+    mf = project / ".harness" / "logs" / "metrics.jsonl"
+    if not mf.exists():
+        return []
+    return [json.loads(ln) for ln in mf.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
+def _totals(rows: list[dict]) -> dict:
+    def g(k: str) -> float:
+        return sum((r.get(k) or 0) for r in rows)
+    span = ""
+    ts = [r.get("ts") for r in rows if r.get("ts")]
+    if len(ts) >= 2:
+        span = str(datetime.datetime.fromisoformat(ts[-1]) - datetime.datetime.fromisoformat(ts[0]))
+    return {"calls": len(rows), "wall_s": g("duration_s"), "in": g("input_tokens"),
+            "out": g("output_tokens"), "cache_read": g("cache_read_input_tokens"),
+            "cost": g("cost_usd"), "span": span}
+
+
+def _json_loads(text: str) -> object:
+    """Parse JSON from an agent reply, tolerating ```json fences or surrounding prose."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[A-Za-z0-9]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        for opener, closer in (("{", "}"), ("[", "]")):  # last resort: slice the bracketed span
+            i, j = t.find(opener), t.rfind(closer)
+            if i != -1 and j > i:
+                try:
+                    return json.loads(t[i:j + 1])
+                except json.JSONDecodeError:
+                    continue
+        raise
 
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -330,6 +378,92 @@ def cmd_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Dev-time, token, and cost analytics from .harness/logs/metrics.jsonl."""
+    rows = _load_metrics(Path(".").resolve())
+    if not rows:
+        print("(no metrics yet — run an agent step, e.g. 'hssd overview analyze')")
+        return 0
+    t = _totals(rows)
+    print(f"AI calls:         {t['calls']}")
+    print(f"Agent wall time:  {t['wall_s']:.1f}s")
+    if t["span"]:
+        print(f"Elapsed (span):   {t['span']}")
+    print(f"Input tokens:     {int(t['in']):,}  (cache-read {int(t['cache_read']):,})")
+    print(f"Output tokens:    {int(t['out']):,}")
+    print(f"Cost (USD):       ${t['cost']:.4f}")
+    byrole: dict[str, dict] = {}
+    for r in rows:
+        d = byrole.setdefault(r.get("role", "?"), {"n": 0, "s": 0.0, "in": 0, "out": 0, "cost": 0.0})
+        d["n"] += 1
+        d["s"] += r.get("duration_s") or 0
+        d["in"] += r.get("input_tokens") or 0
+        d["out"] += r.get("output_tokens") or 0
+        d["cost"] += r.get("cost_usd") or 0
+    print("\nBy role:")
+    for k, d in sorted(byrole.items()):
+        print(f"  {k:<24} {d['n']:>3} calls  {d['s']:>6.1f}s  "
+              f"in {int(d['in']):>8,}  out {int(d['out']):>7,}  ${d['cost']:.4f}")
+    return 0
+
+
+def cmd_ailog(args: argparse.Namespace) -> int:
+    """Render docs/AI_LOG.md (the AI Interaction Log deliverable) from the captured metrics.
+
+    Regenerates the Summary + Interactions; preserves any human-written Corrections/Reflection.
+    """
+    project = Path(".").resolve()
+    rows = _load_metrics(project)
+    out = project / "docs" / "AI_LOG.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    human_tail = ""
+    if out.exists():
+        old = out.read_text(encoding="utf-8")
+        idx = old.find("## Corrections")
+        if idx != -1:
+            human_tail = old[idx:].rstrip() + "\n"
+
+    t = _totals(rows)
+    span = f" (elapsed span {t['span']})" if t["span"] else ""
+    lines = [
+        "# AI Interaction Log", "",
+        "> Auto-drafted by `hssd ailog` from `.harness/logs/metrics.jsonl`. Summary and "
+        "Interactions are generated; fill **Corrections** and **Reflection** by hand. Re-running "
+        "preserves your Corrections/Reflection.", "",
+        "## Summary", "",
+        f"- AI calls: **{t['calls']}**",
+        f"- Agent wall time: **{t['wall_s']:.1f}s**{span}",
+        f"- Tokens in/out: **{int(t['in']):,} / {int(t['out']):,}** (cache-read {int(t['cache_read']):,})",
+        f"- Cost: **${t['cost']:.4f}**", "",
+        "## Interactions", "",
+    ]
+    if not rows:
+        lines.append("_(no AI calls recorded yet)_\n")
+    for i, r in enumerate(rows, 1):
+        lines += [
+            f"### {i}. `{r.get('role', '?')}` — {r.get('ts', '')}",
+            f"tokens in/out {r.get('input_tokens', 0)}/{r.get('output_tokens', 0)} · "
+            f"cost ${(r.get('cost_usd') or 0):.4f} · {r.get('duration_s', 0)}s", "",
+            "**Prompt (preview):**", "", "```text", (r.get("prompt_preview", "") or "").strip(), "```", "",
+            "**Output (summary):**", "", "```text", (r.get("result_preview", "") or "").strip(), "```", "",
+        ]
+    if human_tail:
+        lines.append(human_tail)
+    else:
+        lines += [
+            "## Corrections & redirections", "",
+            "- _(where you corrected or redirected the AI)_", "",
+            "## Reflection", "",
+            "- _(what the AI was good at)_",
+            "- _(where it failed you)_",
+            "- _(what you double-checked manually)_", "",
+        ]
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"OK: wrote {out} — {t['calls']} interaction(s). Fill Corrections + Reflection by hand.")
+    return 0
+
+
 def _pm(project: Path) -> sqlite3.Connection:
     """Open (and init) the local PM spine. The PM Port's default backend."""
     path = project / ".harness" / "pm.sqlite"
@@ -447,16 +581,62 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
         parts.append("\n\nRespond with ONLY valid JSON, no prose.")
     composed = "\n".join(parts)
 
+    t0 = time.monotonic()
+
     if backend == "mock":
         mf = os.environ.get("HSSD_MOCK_FILE")
         if mf and Path(mf).exists():
-            return json.loads(Path(mf).read_text(encoding="utf-8")).get(role, "")
-        return os.environ.get("HSSD_MOCK_OUTPUT", "")
+            out = json.loads(Path(mf).read_text(encoding="utf-8")).get(role, "")
+        else:
+            out = os.environ.get("HSSD_MOCK_OUTPUT", "")
+        _metric({"role": role, "backend": "mock", "duration_s": round(time.monotonic() - t0, 3),
+                 "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                 "prompt_chars": len(prompt), "result_chars": len(out),
+                 "prompt_preview": prompt[:280], "result_preview": out[:280]})
+        return out
+
+    # Real backend. Resolve the CLI via PATHEXT (on Windows it's a `claude.cmd` shim that bare
+    # argv won't find), pass the prompt over stdin (dodges Windows arg-length/quoting limits),
+    # and request JSON so we capture token usage, cost, and duration.
+    exe = shutil.which("claude")
+    if not exe:
+        print("BLOCK: 'claude' CLI not found on PATH. Install Claude Code, or set "
+              "HSSD_AGENT_BACKEND=mock for a dry run.", file=sys.stderr)
+        _metric({"role": role, "backend": "claude", "duration_s": round(time.monotonic() - t0, 3),
+                 "error": "claude-not-found", "prompt_chars": len(prompt)})
+        return ""
+    argv = [exe, "-p", "--output-format", "json"]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        argv = ["cmd", "/c", *argv]  # CreateProcess can't launch a .cmd batch shim directly
     res = subprocess.run(
-        ["claude", "-p", composed],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        argv, input=composed, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", check=False,
     )
-    return res.stdout.strip()
+    elapsed = round(time.monotonic() - t0, 3)
+    raw = (res.stdout or "").strip()
+    if not raw and (res.stderr or "").strip():
+        print(f"  (claude stderr) {res.stderr.strip()[:500]}", file=sys.stderr)
+    text, usage, cost, api_ms = raw, {}, None, None
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            text = obj.get("result", raw)  # the assistant's text (may itself be JSON)
+            usage = obj.get("usage") or {}
+            cost = obj.get("total_cost_usd")
+            api_ms = obj.get("duration_ms")
+    except json.JSONDecodeError:
+        pass  # older CLI without --output-format json: treat stdout as plain text
+    _metric({
+        "role": role, "backend": "claude", "duration_s": elapsed, "api_ms": api_ms,
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+        "cost_usd": cost,
+        "prompt_chars": len(prompt), "result_chars": len(text),
+        "prompt_preview": prompt[:280], "result_preview": text[:280],
+    })
+    return text.strip()
 
 
 def _available_templates() -> list[tuple[str, list[str]]]:
@@ -574,7 +754,7 @@ def cmd_overview(args: argparse.Namespace) -> int:
         expect_json=True,
     )
     try:
-        data = json.loads(out)
+        data = _json_loads(out)
     except json.JSONDecodeError:
         print("BLOCK: analyst did not return valid JSON:\n" + out, file=sys.stderr)
         return 1
@@ -617,7 +797,7 @@ def cmd_janitor(args: argparse.Namespace) -> int:
     con = _pm(project)
     out = _run_role("janitor", "Audit this codebase and report deduped findings.", expect_json=True)
     try:
-        findings = json.loads(out)
+        findings = _json_loads(out)
     except json.JSONDecodeError:
         print("BLOCK: janitor did not return valid JSON:\n" + out, file=sys.stderr)
         return 1
@@ -649,7 +829,7 @@ def cmd_janitor(args: argparse.Namespace) -> int:
 
 def _gate_ok(out: str) -> bool:
     try:
-        return json.loads(out).get("verdict") == "PASS"
+        return _json_loads(out).get("verdict") == "PASS"
     except (json.JSONDecodeError, AttributeError):
         return False
 
@@ -791,6 +971,12 @@ def main(argv: list[str] | None = None) -> int:
     pl = sub.add_parser("log", help="show the session log")
     pl.add_argument("--verbose", action="store_true")
     pl.set_defaults(func=cmd_log)
+
+    ps = sub.add_parser("stats", help="dev-time, token & cost analytics from the metrics log")
+    ps.set_defaults(func=cmd_stats)
+
+    pa = sub.add_parser("ailog", help="render docs/AI_LOG.md (the AI Interaction Log deliverable)")
+    pa.set_defaults(func=cmd_ailog)
 
     args = p.parse_args(argv)
     return int(args.func(args))
