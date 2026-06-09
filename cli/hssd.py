@@ -683,6 +683,54 @@ def cmd_work(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reset(args: argparse.Namespace) -> int:
+    """Reset to re-run: one work item, all engineered items, or the whole backlog.
+
+    Keeps logs/metrics (the audit trail) unless --hard. Never touches git branches.
+    """
+    project = Path(".").resolve()
+    con = _pm(project)
+    harness = project / ".harness"
+    eng = harness / "engagements"
+
+    if args.hard or args.backlog:
+        con.execute("DELETE FROM work_items")
+        con.commit()
+        shutil.rmtree(eng, ignore_errors=True)
+        (harness / "plan.json").unlink(missing_ok=True)
+        if args.hard:
+            shutil.rmtree(harness / "logs", ignore_errors=True)  # also clear cost/AI-log history
+        _log(project, "reset", "hard" if args.hard else "backlog")
+        extra = "; logs/metrics cleared" if args.hard else "; logs/metrics kept"
+        print(f"OK: backlog + plan + engagement state cleared (overview kept{extra}). "
+              "Re-run: hssd overview analyze → split.")
+        return 0
+
+    if args.all:
+        con.execute("UPDATE work_items SET status='open', assignee=NULL, branch=NULL "
+                    "WHERE lane IS NULL OR lane != 'config'")  # config capabilities stay enabled
+        con.commit()
+        shutil.rmtree(eng, ignore_errors=True)
+        _log(project, "reset", "all")
+        print("OK: all engineered work items → open; engagement state cleared "
+              "(config stays enabled; logs/metrics kept).")
+        return 0
+
+    if not args.id:
+        print("BLOCK: reset needs <id>, or --all / --backlog / --hard", file=sys.stderr)
+        return 1
+    if not con.execute("SELECT 1 FROM work_items WHERE id=?", (args.id,)).fetchone():
+        print(f"BLOCK: {args.id} not found", file=sys.stderr)
+        return 1
+    con.execute("UPDATE work_items SET status='open', assignee=NULL, branch=NULL WHERE id=?", (args.id,))
+    con.commit()
+    shutil.rmtree(eng / args.id, ignore_errors=True)
+    _log(project, "reset", args.id)
+    print(f"OK: {args.id} reset to open; its engagement state cleared. Re-claim/engage when ready.")
+    print("  (your git branch, if any, is left as-is — delete it manually if you want.)")
+    return 0
+
+
 def _read_agent(role: str) -> str:
     """Load a subagent definition (project override, else the package)."""
     for base in (Path(".claude/agents"), AGENTS):
@@ -1314,6 +1362,13 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--status", default=None, help="filter for list (e.g. open)")
     pw.add_argument("--as", dest="who", default="me")
     pw.set_defaults(func=cmd_work)
+
+    pr = sub.add_parser("reset", help="reset to re-run: a work item, --all engineered items, or --backlog/--hard")
+    pr.add_argument("id", nargs="?", help="work item to reset (back to open + clear its engagement state)")
+    pr.add_argument("--all", action="store_true", help="reset every engineered item to open + clear engagement state")
+    pr.add_argument("--backlog", action="store_true", help="wipe work items + plan + engagement state (re-split from the brief)")
+    pr.add_argument("--hard", action="store_true", help="like --backlog and also clear logs/metrics (fresh cost baseline)")
+    pr.set_defaults(func=cmd_reset)
 
     pe = sub.add_parser("engage", help="run the 6-phase engagement loop on a work item")
     pe.add_argument("id")
