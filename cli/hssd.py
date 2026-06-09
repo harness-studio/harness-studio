@@ -46,7 +46,9 @@ Non-negotiables:
 - **Spec-driven:** no code before the spec/ADR is locked (Spec Lock, end of architecture).
 - **Evidence over assertion:** "done" means test output, a diff, or a screenshot — never a claim.
 - **Maker != checker:** the author never certifies its own work; an independent adversary tries to break it.
-- Record decisions in `docs/ADR.md`; capture the interaction log in `docs/AI_LOG.md`.
+- **Governance is standing, not an end task:** the AI Interaction Log is captured *continuously from the
+  first interaction* (run `hssd ailog` anytime to render `docs/AI_LOG.md` from the session metrics); the
+  ADR (`docs/ADR.md`) is assembled across phases. Never reconstruct them at the end.
 
 Engagement loop: P0 Intake -> P1 Stories & Acceptance Criteria -> P2 Architecture -> [Spec Lock]
 -> P3 Build -> P4 adversarial verification (loop-until-dry) -> [Merge].
@@ -509,17 +511,17 @@ def cmd_work(args: argparse.Namespace) -> int:
         return 0
 
     if args.action == "list":
-        q = "SELECT id, status, type, assignee, title FROM work_items"
+        q = "SELECT id, status, type, lane, assignee, title FROM work_items"
         params: tuple[str, ...] = ()
         if args.status:
             q += " WHERE status=?"
             params = (args.status,)
-        rows = con.execute(q + " ORDER BY id", params).fetchall()
+        rows = con.execute(q + " ORDER BY rowid", params).fetchall()  # creation order, not lexical
         if not rows:
             print("(no work items)")
             return 0
         for r in rows:
-            print(f"{r[0]:<8} {r[1]:<12} {r[2]:<9} {(r[3] or '-'):<10} {r[4]}")
+            print(f"{r[0]:<8} {r[1]:<12} {r[2]:<9} {(r[3] or '-'):<9} {(r[4] or '-'):<8} {r[5]}")
         return 0
 
     if args.action == "show":
@@ -681,19 +683,36 @@ def _recommend_templates(techs: list[str]) -> None:
         print("  -> the agents build these directly using the skills (no template needed).")
 
 
+def _governance_rank(title: str) -> int:
+    """Standing governance deliverables lead the backlog — they're active from minute zero,
+    captured continuously, never sequenced as end tasks. AI log first, then ADR, then README."""
+    t = title.lower()
+    if "interaction log" in t or ("ai" in t and "log" in t):
+        return 0
+    if "adr" in t or "architecture decision" in t:
+        return 1
+    if "readme" in t:
+        return 2
+    return 3
+
+
 def _create_work_items(project: Path, concerns: list[dict]) -> int:
-    """Insert each concern as an open work item in the PM spine. Returns how many were created."""
+    """Insert each concern as an open work item. Standing governance items (AI log, ADR, README)
+    lead the backlog and are tagged lane='standing'; everything else is lane='feature'."""
     con = _pm(project)
     base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
-    for i, c in enumerate(concerns, start=1):
+    ordered = sorted(concerns, key=lambda c: _governance_rank(c.get("title", "")))
+    for i, c in enumerate(ordered, start=1):
+        standing = _governance_rank(c.get("title", "")) < 3
         con.execute(
-            "INSERT INTO work_items(id, title, type, status, created_at, source) "
-            "VALUES(?,?,?,'open',?, 'overview')",
+            "INSERT INTO work_items(id, title, type, status, created_at, source, lane) "
+            "VALUES(?,?,?,'open',?, 'overview', ?)",
             (f"LOC-{base + i}", c.get("title", "(untitled)"), c.get("type", "feature"),
-             datetime.datetime.now(datetime.timezone.utc).isoformat()),
+             datetime.datetime.now(datetime.timezone.utc).isoformat(),
+             "standing" if standing else "feature"),
         )
     con.commit()
-    return len(concerns)
+    return len(ordered)
 
 
 def _print_plan(data: dict) -> list[dict]:
