@@ -859,35 +859,47 @@ def _recommend_templates(techs: list[str]) -> None:
         print("  -> the agents build these directly using the skills (no template needed).")
 
 
-def _governance_rank(title: str) -> int:
-    """Standing governance deliverables lead the backlog — they're active from minute zero,
-    captured continuously, never sequenced as end tasks. AI log first, then ADR, then README."""
-    t = title.lower()
-    if "interaction log" in t or ("ai" in t and "log" in t):
-        return 0
-    if "adr" in t or "architecture decision" in t:
-        return 1
-    if "readme" in t:
-        return 2
-    return 3
+def _lane_for(c: dict) -> str:
+    """Classify a concern at split time:
+    - 'config'   — a capability the harness PROVIDES (enable, don't engineer): the AI Interaction
+                   Log / logging / audit. Auto-satisfied at split; never engaged.
+    - 'standing' — a governance doc (ADR, README): produced + rubric-checked, not code-engineered.
+    - 'feature'  — an engineered task (the normal case)."""
+    kind = (c.get("kind") or "").lower()
+    t = (c.get("title") or "").lower()
+    if kind == "config" or "interaction log" in t or ("ai" in t and "log" in t):
+        return "config"
+    if "adr" in t or "architecture decision" in t or "readme" in t:
+        return "standing"
+    return "feature"
+
+
+def _lane_order(lane: str) -> int:
+    return {"config": 0, "standing": 1}.get(lane, 2)  # config + governance lead the backlog
 
 
 def _create_work_items(project: Path, concerns: list[dict]) -> int:
-    """Insert each concern as an open work item. Standing governance items (AI log, ADR, README)
-    lead the backlog and are tagged lane='standing'; everything else is lane='feature'."""
+    """Insert each concern. `config` items are capabilities the harness provides → recorded
+    'done' (enabled) at split, never engaged. `standing`/`feature` stay 'open'."""
     con = _pm(project)
     base = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
-    ordered = sorted(concerns, key=lambda c: _governance_rank(c.get("title", "")))
+    ordered = sorted(concerns, key=lambda c: _lane_order(_lane_for(c)))
+    enabled = 0
     for i, c in enumerate(ordered, start=1):
-        standing = _governance_rank(c.get("title", "")) < 3
+        lane = _lane_for(c)
+        status = "done" if lane == "config" else "open"  # config is satisfied by the harness itself
+        if lane == "config":
+            enabled += 1
         con.execute(
             "INSERT INTO work_items(id, title, type, status, created_at, source, lane) "
-            "VALUES(?,?,?,'open',?, 'overview', ?)",
+            "VALUES(?,?,?,?,?, 'overview', ?)",
             (f"LOC-{base + i}", c.get("title", "(untitled)"), c.get("type", "feature"),
-             datetime.datetime.now(datetime.timezone.utc).isoformat(),
-             "standing" if standing else "feature"),
+             status, datetime.datetime.now(datetime.timezone.utc).isoformat(), lane),
         )
     con.commit()
+    if enabled:
+        print(f"  ({enabled} config item(s) auto-enabled by the harness — not engineered; "
+              "e.g. the AI log is captured automatically, render with `hssd ailog`)")
     return len(ordered)
 
 
@@ -898,9 +910,12 @@ def _print_plan(data: dict) -> list[dict]:
         print(analysis)
     concerns = data.get("concerns", [])
     if concerns:
-        print("\nProposed work items (review these — nothing is created yet):")
+        print("\nProposed items (review these — nothing is created yet):")
         for i, c in enumerate(concerns, start=1):
-            print(f"  {i}. [{c.get('type', 'feature')}] {c.get('title', '(untitled)')}")
+            lane = _lane_for(c)
+            tag = {"config": "config · auto-enabled", "standing": "standing · rubric"}.get(
+                lane, c.get("type", "feature"))
+            print(f"  {i}. [{tag}] {c.get('title', '(untitled)')}")
     _recommend_templates(data.get("technologies", []))
     return concerns
 
@@ -943,9 +958,11 @@ def cmd_overview(args: argparse.Namespace) -> int:
     text = ov.read_text(encoding="utf-8")
     out = _run_role(
         "product-analyst",
-        "Analyze this project brief. Return JSON with: 'analysis' (your understanding + a short "
-        "plan), 'concerns' (a list of {title, type} work items the brief decomposes into), and "
-        f"'technologies' (a list).\n\n{text}",
+        "Analyze this project brief. Return JSON with: 'analysis' (understanding + short plan), "
+        "'concerns' (a list of {title, type, kind} the brief decomposes into — kind is 'task' to "
+        "engineer, or 'config' for a capability the harness already provides and just needs "
+        "enabling, e.g. the AI Interaction Log / logging / audit), and 'technologies' (a list)."
+        f"\n\n{text}",
         expect_json=True,
     )
     try:
@@ -1038,6 +1055,17 @@ def cmd_engage(args: argparse.Namespace) -> int:
         print(f"BLOCK: {args.id} not found", file=sys.stderr)
         return 1
     title, status, lane = row
+    if (lane or "") == "config":
+        # A capability the harness provides — nothing to engineer. Already satisfied at split.
+        print(f"▶ {args.id} · {title}  (config — harness-provided capability)")
+        print("  Nothing to engineer. The AI Interaction Log is captured continuously in "
+              ".harness/logs/metrics.jsonl (always on) — render it with `hssd ailog` and fill the "
+              "human sections. Marking enabled.")
+        con.execute("UPDATE work_items SET status='done' WHERE id=?", (args.id,))
+        con.commit()
+        _log(project, "engage", f"{args.id} config-enabled")
+        print(f"✓ {args.id} enabled (config) — status=done")
+        return 0
     if status != "in-progress" and not args.force:
         print(f"BLOCK: {args.id} is '{status}' — claim it first (hssd work claim {args.id})", file=sys.stderr)
         return 1

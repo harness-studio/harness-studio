@@ -14,7 +14,16 @@ When asked to **ANALYZE**, respond with ONLY a JSON object:
 `{"analysis": "<concise problem statement>", "open_questions": ["..."], "technologies": ["python","fastapi","react"]}`.
 
 When asked to **SPLIT CONCERNS**, respond with ONLY a JSON object:
-`{"concerns": [{"title":"...","type":"feature|bug|chore","problem":"..."}], "technologies": ["python","fastapi","react"]}`.
+`{"concerns": [{"title":"...","type":"feature|bug|chore","kind":"task|config","problem":"..."}], "technologies": ["python","fastapi","react"]}`.
+
+**Classify each concern's `kind`:**
+- `task` — something to **engineer** (build a feature, fix a bug, author a doc). The normal case.
+- `config` — a **capability the harness already provides and just needs enabling**, NOT engineering.
+  The clearest example: an **AI Interaction Log / activity logging / audit trail** — Harness Studio
+  captures this automatically (`.harness/logs/metrics.jsonl`, always on) and renders it with
+  `hssd ailog`. Don't turn a config request into an engineered task; mark it `config` so the tool
+  enables it instead of running an engagement on it.
+When unsure, prefer `task`. Only mark `config` when the framework demonstrably provides the capability.
 
 `technologies` = the stack the project will need, so the tool can suggest matching templates
 (or, when none match, let the agents build directly with the skills).
