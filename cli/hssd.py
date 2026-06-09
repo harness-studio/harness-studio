@@ -639,6 +639,13 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40]
 
 
+def _git_switch(branch: str) -> None:
+    """Switch to `branch`, creating it if needed — idempotent across resets (no 'already exists')."""
+    made = subprocess.run(["git", "checkout", "-q", "-b", branch], capture_output=True, text=True)
+    if made.returncode != 0:
+        subprocess.run(["git", "checkout", "-q", branch], check=False)
+
+
 def cmd_work(args: argparse.Namespace) -> int:
     project = Path(".").resolve()
     con = _pm(project)
@@ -754,6 +761,16 @@ def _read_agent(role: str) -> str:
     return f"You are the {role}."
 
 
+def _agent_tools(role: str) -> str:
+    """The role's allowed tools (from its frontmatter `tools:` line) → passed to --allowedTools so
+    the headless call is least-privilege. Read-only default for roles that declare none."""
+    for line in _read_agent(role).splitlines():
+        m = re.match(r"\s*tools:\s*(.+)", line)
+        if m:
+            return ",".join(t.strip() for t in m.group(1).split(",") if t.strip())
+    return "Read,Grep,Glob"
+
+
 # Role -> blessed skills it loads (the CLI does the skill routing / scoping).
 ROLE_SKILLS = {
     "backend-dev": ["python", "fastapi"],
@@ -762,8 +779,36 @@ ROLE_SKILLS = {
 }
 
 
-def _claude_argv(exe: str, fmt: str) -> list[str]:
+# Per-engage budget guard — a hard ceiling so a run NEVER loops forever / burns tokens with no
+# progress. cmd_engage resets+configures it; _run_role charges every AI call and aborts on breach.
+_BUDGET = {"calls": 0, "max_calls": 0, "cost": 0.0, "max_cost": 0.0}
+
+
+def _budget_tick(cost: float | None) -> None:
+    _BUDGET["calls"] += 1
+    _BUDGET["cost"] += cost or 0.0
+    mc, mx = _BUDGET["max_calls"], _BUDGET["max_cost"]
+    if mc and _BUDGET["calls"] >= mc:
+        raise SystemExit(
+            f"\n⛔ STOP: hit the {mc}-AI-call ceiling (${_BUDGET['cost']:.2f} this run). Not looping "
+            "forever — raise with --max-calls=N, or check why it isn't converging. State is saved; "
+            "resume with `hssd engage <id>` or clear with `hssd reset <id>`.")
+    if mx and _BUDGET["cost"] >= mx:
+        raise SystemExit(
+            f"\n⛔ STOP: hit the ${mx:.2f} budget ({_BUDGET['calls']} calls this run). Raise with "
+            "--budget=USD. State is saved; resume or `hssd reset <id>`.")
+
+
+def _claude_argv(exe: str, fmt: str, allowed: str | None = None) -> list[str]:
     argv = [exe, "-p", "--output-format", fmt]
+    # NOTE: do NOT add --bare by default — it also disables credential/settings discovery, so
+    # subscription (login) auth breaks with "Not logged in". Recursion is instead prevented by
+    # --allowedTools (analysts/adversaries get no Bash → can't shell out to hssd) + a prompt guard.
+    # HSSD_BARE=1 opts into full isolation for users on ANTHROPIC_API_KEY auth.
+    if os.environ.get("HSSD_BARE", "0") == "1":
+        argv.append("--bare")
+    if allowed:  # least-privilege: the role only gets its declared tools (no Bash → can't shell out)
+        argv += ["--allowedTools", allowed]
     if fmt == "stream-json":
         argv.append("--verbose")  # stream-json requires --verbose
     if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
@@ -771,9 +816,9 @@ def _claude_argv(exe: str, fmt: str) -> list[str]:
     return argv
 
 
-def _claude_blocking(exe: str, composed: str):
+def _claude_blocking(exe: str, composed: str, allowed: str | None = None):
     """Single blocking JSON call (fallback / HSSD_STREAM=0). Returns (text, usage, cost, api_ms)."""
-    res = subprocess.run(_claude_argv(exe, "json"), input=composed, capture_output=True,
+    res = subprocess.run(_claude_argv(exe, "json", allowed), input=composed, capture_output=True,
                          text=True, encoding="utf-8", errors="replace", check=False)
     raw = (res.stdout or "").strip()
     if not raw and (res.stderr or "").strip():
@@ -788,10 +833,10 @@ def _claude_blocking(exe: str, composed: str):
     return raw, {}, None, None
 
 
-def _claude_stream(exe: str, composed: str, role: str):
+def _claude_stream(exe: str, composed: str, role: str, allowed: str | None = None):
     """Run `claude -p --output-format stream-json` and surface the interaction LIVE so a terminal
     user isn't in the dark. Returns (text, usage, cost, api_ms)."""
-    proc = subprocess.Popen(_claude_argv(exe, "stream-json"), stdin=subprocess.PIPE,
+    proc = subprocess.Popen(_claude_argv(exe, "stream-json", allowed), stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace", bufsize=1)
     if proc.stdin:
@@ -846,6 +891,9 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
     parts.append(f"\n# Task\n{prompt}")
     if expect_json:
         parts.append("\n\nRespond with ONLY valid JSON, no prose.")
+    parts.append("\n\n# Isolation\nYou are a single-purpose Harness Studio role. Do NOT run the "
+                 "`hssd` CLI, invoke slash commands or skills, or start another engagement. Perform "
+                 "ONLY your role above and return exactly the requested output.")
     composed = "\n".join(parts)
 
     t0 = time.monotonic()
@@ -860,6 +908,7 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
                  "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
                  "prompt_chars": len(prompt), "result_chars": len(out),
                  "prompt_preview": prompt[:280], "result_preview": out[:280]})
+        _budget_tick(0.0)
         return out
 
     # Real backend. Resolve the CLI via PATHEXT (on Windows it's a `claude.cmd` shim).
@@ -873,14 +922,15 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
 
     # Stream the interaction LIVE (silence in a terminal = "in the dark"); fall back to a single
     # blocking call if streaming isn't available. HSSD_STREAM=0 forces the quiet blocking path.
+    allowed = _agent_tools(role)  # least-privilege: only this role's declared tools
     if os.environ.get("HSSD_STREAM", "1") != "0":
         try:
-            text, usage, cost, api_ms = _claude_stream(exe, composed, role)
+            text, usage, cost, api_ms = _claude_stream(exe, composed, role, allowed)
         except Exception as e:  # noqa: BLE001 — any stream hiccup → safe fallback
             print(f"    (stream unavailable: {e}; falling back to a blocking call)", file=sys.stderr)
-            text, usage, cost, api_ms = _claude_blocking(exe, composed)
+            text, usage, cost, api_ms = _claude_blocking(exe, composed, allowed)
     else:
-        text, usage, cost, api_ms = _claude_blocking(exe, composed)
+        text, usage, cost, api_ms = _claude_blocking(exe, composed, allowed)
 
     elapsed = round(time.monotonic() - t0, 3)
     _metric({
@@ -893,6 +943,7 @@ def _run_role(role: str, prompt: str, *, expect_json: bool = False) -> str:
         "prompt_chars": len(prompt), "result_chars": len(text),
         "prompt_preview": prompt[:280], "result_preview": text[:280],
     })
+    _budget_tick(cost)
     return text.strip()
 
 
@@ -1112,6 +1163,8 @@ def cmd_engage(args: argparse.Namespace) -> int:
     """The engagement loop: 6 phases, P4 is the goal-condition (loop-until-dry)."""
     project = Path(".").resolve()
     con = _pm(project)
+    _BUDGET.update(calls=0, cost=0.0, max_calls=getattr(args, "max_calls", 0) or 0,
+                   max_cost=getattr(args, "budget", 0.0) or 0.0)  # hard ceiling for this run
     row = con.execute("SELECT title, status, lane FROM work_items WHERE id=?", (args.id,)).fetchone()
     if not row:
         print(f"BLOCK: {args.id} not found", file=sys.stderr)
@@ -1139,7 +1192,7 @@ def cmd_engage(args: argparse.Namespace) -> int:
         con.commit()
         if cur.rowcount:
             _log(project, "work claim", f"{args.id} -> {branch} (via engage)")
-            subprocess.run(["git", "checkout", "-q", "-b", branch], check=False)
+            _git_switch(branch)
             print(f"  claimed {args.id} · branch {branch}")
         elif not args.force:
             print(f"BLOCK: {args.id} could not be claimed (taken concurrently?). "
@@ -1416,6 +1469,10 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--accept-recommended", action="store_true", dest="accept_recommended",
                     help="on a blocked intake/AC/architecture gate, auto-take the adversary's "
                          "recommended resolution and retry (graduated autonomy; loop-forward)")
+    pe.add_argument("--max-calls", type=int, default=40, dest="max_calls",
+                    help="hard ceiling on total AI calls for the run — never loop forever (0 = off)")
+    pe.add_argument("--budget", type=float, default=0.0,
+                    help="hard USD ceiling for the run (0 = off)")
     pe.set_defaults(func=cmd_engage)
 
     pj = sub.add_parser("janitor", help="discovery heartbeat — audit + dedup + file work items")
