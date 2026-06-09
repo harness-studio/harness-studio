@@ -36,6 +36,74 @@ DOTFILE_MAP = {
     "pre-commit-config.yaml": ".pre-commit-config.yaml",
 }
 
+CLAUDE_MD = """# CLAUDE.md — governed by Harness Studio (hssd)
+
+This project runs a governed, adversarial process. **Whoever builds never grades their own "done."**
+The roles live in `.claude/agents/`; the blessed conventions in `.claude/skills/`.
+
+Non-negotiables:
+- **Spec-driven:** no code before the spec/ADR is locked (Spec Lock, end of architecture).
+- **Evidence over assertion:** "done" means test output, a diff, or a screenshot — never a claim.
+- **Maker != checker:** the author never certifies its own work; an independent adversary tries to break it.
+- Record decisions in `docs/ADR.md`; capture the interaction log in `docs/AI_LOG.md`.
+
+Engagement loop: P0 Intake -> P1 Stories & Acceptance Criteria -> P2 Architecture -> [Spec Lock]
+-> P3 Build -> P4 adversarial verification (loop-until-dry) -> [Merge].
+Backlog & flow via the `hssd` CLI (`hssd work list`, `hssd engage <id>`).
+
+Framework: https://github.com/harness-studio/harness-studio
+"""
+
+
+def _mirror_if_absent(src: Path, dst: Path) -> tuple[int, int]:
+    """Copy every file under src into dst, create-if-absent (never overwrite). Returns (created, skipped)."""
+    created = skipped = 0
+    for f in sorted(src.rglob("*")):
+        if f.is_dir():
+            continue
+        target = dst / f.relative_to(src)
+        if target.exists():
+            skipped += 1
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(f, target)
+        created += 1
+    return created, skipped
+
+
+def _wire_claude(dest: Path) -> tuple[int, int]:
+    """Install the subagents + skills into the project's .claude/ so Claude Code sees them.
+
+    Non-destructive (create-if-absent) -> safe on a legacy repo and idempotent.
+    """
+    created = skipped = 0
+    if AGENTS.exists():
+        c, s = _mirror_if_absent(AGENTS, dest / ".claude" / "agents")
+        created += c
+        skipped += s
+    skills_root = PKG_ROOT / "skills"
+    if skills_root.exists():
+        for d in sorted(skills_root.iterdir()):
+            if d.is_dir():  # a real skill (<name>/SKILL.md); skip top-level meta files
+                c, s = _mirror_if_absent(d, dest / ".claude" / "skills" / d.name)
+                created += c
+                skipped += s
+    return created, skipped
+
+
+def _detect_stack(dest: Path) -> str:
+    """Coarse stack sniff for hssd.yaml (overview/analyze refines it later)."""
+    hits: list[str] = []
+    if (dest / "pyproject.toml").exists() or (dest / "requirements.txt").exists() or any(dest.glob("*.py")):
+        hits.append("python")
+    if (dest / "package.json").exists():
+        hits.append("node")
+    if (dest / "go.mod").exists():
+        hits.append("go")
+    if (dest / "Cargo.toml").exists():
+        hits.append("rust")
+    return ", ".join(hits) or "unknown"
+
 
 def _log(project: Path, action: str, detail: str) -> None:
     """Append to the project's session log (the audit trail / free AI log)."""
@@ -90,8 +158,75 @@ def cmd_new(args: argparse.Namespace) -> int:
     _pm(dest).close()  # initialize the local PM spine (work_items table)
     subprocess.run(["git", "init", "-q", "-b", "main", str(dest)], check=False)
 
-    _log(dest, "new", f"template={args.template} from={args.from_git or 'local'}")
-    print(f"OK: created {dest} (type: project, stack: {args.template})")
+    # 6. Wire the team into .claude/ so Claude Code sees the subagents + skills.
+    nclaude, _ = _wire_claude(dest)
+
+    _log(dest, "new", f"template={args.template} from={args.from_git or 'local'} claude={nclaude}")
+    print(f"OK: created {dest} (type: project, stack: {args.template}); {nclaude} .claude file(s) wired")
+    return 0
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Turn ON Harness Studio in an EXISTING repo (legacy or new) — non-destructive & idempotent.
+
+    Unlike `new` (which scaffolds a fresh project), `init` adopts whatever is already here:
+    it only ever *adds* governance + wiring, never overwrites your files. Safe to re-run.
+    """
+    dest = Path(args.path or ".").resolve()
+    if not dest.is_dir():
+        print(f"BLOCK: {dest} is not a directory", file=sys.stderr)
+        return 1
+
+    created: list[str] = []
+    skipped: list[str] = []
+
+    # 1. Runtime spine (.harness + local PM), kept out of git.
+    (dest / ".harness").mkdir(exist_ok=True)
+    _pm(dest).close()
+    _union_lines(dest / ".gitignore", ".harness/")
+
+    # 2. Project config — create-if-absent (never clobber an existing hssd.yaml).
+    hy = dest / "hssd.yaml"
+    if hy.exists():
+        skipped.append("hssd.yaml")
+    else:
+        hy.write_text(f"type: project\nstack: {_detect_stack(dest)}\n", encoding="utf-8")
+        created.append("hssd.yaml")
+
+    # 3. Governance artifacts (ADR + AI log), create-if-absent.
+    docs = dest / "docs"
+    docs.mkdir(exist_ok=True)
+    for name in ("ADR.md", "AI_LOG.md"):
+        tpl = TEMPLATES / name
+        target = docs / name
+        if target.exists():
+            skipped.append(f"docs/{name}")
+        elif tpl.exists():
+            shutil.copy(tpl, target)
+            created.append(f"docs/{name}")
+
+    # 4. CLAUDE.md — standing instructions (create-if-absent; legacy CLAUDE.md is left alone).
+    cm = dest / "CLAUDE.md"
+    if cm.exists():
+        skipped.append("CLAUDE.md")
+    else:
+        cm.write_text(CLAUDE_MD, encoding="utf-8")
+        created.append("CLAUDE.md")
+
+    # 5. Wire the team into .claude/ so Claude Code sees the subagents + skills.
+    nclaude, sclaude = _wire_claude(dest)
+
+    _log(dest, "init", f"created={len(created)} skipped={len(skipped)} claude(+{nclaude}/={sclaude})")
+
+    print(f"OK: Harness Studio is ON in {dest}")
+    if created:
+        print("  created: " + ", ".join(created))
+    if skipped:
+        print("  kept (already present): " + ", ".join(skipped))
+    print(f"  .claude/: {nclaude} agent/skill file(s) installed, {sclaude} already present")
+    if not (dest / ".git").exists():
+        print("  note: no git repo here — branch/claim features need git (run: git init -b main)")
+    print('  next: hssd overview add <brief.md>  ·  hssd work add --title "..."  ·  hssd engage <id>')
     return 0
 
 
@@ -562,6 +697,10 @@ def main(argv: list[str] | None = None) -> int:
     pn.add_argument("--template", default="backend-fastapi-sqlite")
     pn.add_argument("--from", dest="from_git", default=None)
     pn.set_defaults(func=cmd_new)
+
+    pi = sub.add_parser("init", help="turn ON Harness Studio in an existing repo (non-destructive)")
+    pi.add_argument("path", nargs="?", default=".", help="repo to adopt (default: current dir)")
+    pi.set_defaults(func=cmd_init)
 
     pt = sub.add_parser("template", help="manage templates")
     pt.add_argument("action", choices=["list", "import"])
