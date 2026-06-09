@@ -158,6 +158,24 @@ The `harness-sd` CLI (e.g. `harness-sd new`) would copy `agents/` into `.claude/
 
 The package should be **opinionated but tunable**: sensible defaults (the full adversarial team, all gates) with **`hssd.yaml`** (the project's central config) to enable/disable roles, set execution lanes (fast / standard / deliberate), set stack tiers, the conflict policy, and the autonomy level per gate. Defaults favor safety; you dial down rigor for low-risk work, never the reverse by accident. (`.harness/` holds runtime state — pm.sqlite, logs, cache — not committed config.)
 
+## Related work & layer positioning
+
+"Harness" is becoming an overloaded word. Two adjacent bodies of work describe a **runtime control plane** for agents — a layer that governs what an agent is *allowed to do while executing*:
+
+- **Adnan Masood — "The Agent Harness"**: a control plane for reliable, governed, economic agentic AI at enterprise scale (Context / Tools / Runtime / State / Trust / Observability planes; human-approval checkpoints; audit trails; the Model Context Protocol for tool access and Agent-to-Agent for delegation).
+- **Evangelos Pappas — "Building a Secure Agentic System"**: a concrete parallel sub-agent harness where a deny-by-default control plane authorizes every spawn, tool call, and route (a Cedar policy), enforces a budget ceiling, isolates each sub-agent in a git worktree, routes by policy before price, and puts an injection-detecting proxy on the inference path. Its load-bearing rule: *the sub-agents never decide whether their own actions are allowed.*
+
+**Where Harness Studio sits.** Those govern the **runtime / execution** layer (may this action run, on which model, within what budget). Harness Studio governs the **delivery** layer (how software is specified, built, and proven). They are complementary, not competing — and they share one principle at different layers: **the actor never judges its own action.**
+
+| Layer | Question it answers | The principle |
+|---|---|---|
+| **Delivery harness** (Harness Studio) | "Is this work actually done and correct?" | maker ≠ checker — an adversary verifies |
+| **Runtime control plane** (Masood / Pappas) | "Is this action allowed to run right now?" | actor ≠ authorizer — a control plane decides |
+
+**Boundary (scope discipline, PHILOSOPHY tenets 1 & 4).** A full enterprise runtime control plane — policy-as-code engines (Cedar / OPA), data-residency / jurisdiction routing, Agent-to-Agent, multi-tenant identity — is **out of scope** for Harness Studio's core; that is a different product layer, and absorbing it would dilute the framework. What *is* in scope is hardening Harness Studio's **own** agent execution, so the framework can't (for example) drop a production database while doing its work — the failure that opens Pappas's piece. That lightweight, opt-in runtime gate is specified in [`proposals/runtime-execution-gate.md`](proposals/runtime-execution-gate.md), layered *under* the delivery process, not folded into it.
+
+> References: Adnan Masood, *The Agent Harness* (infographic, 2026). Evangelos Pappas, *Building a Secure Agentic System*, Hyperautomation, 2026 — https://hyperautomation.substack.com/p/building-a-secure-agentic-system
+
 ## Relationship to the broader design docs
 
 The deeper rationale lives in the project's design documents (engagement SOP, the continuous-health "esteira", the multi-agent landscape). This package is the **productized, English, installable distillation** of that thinking — the part you hand to a team.

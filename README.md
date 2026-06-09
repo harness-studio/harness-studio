@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/hssd-wordmark.png" alt="Harness Studio — hssd" width="380">
+</p>
+
 # Harness Studio (`hssd`)
 
 > A **governed, adversarial framework for delivering software with AI agents** — where *whoever does the work never judges their own "done"*, every result is proven by evidence, and autonomy is earned, not switched on.
