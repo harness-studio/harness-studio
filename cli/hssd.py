@@ -315,6 +315,38 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mirror_force(src: Path, dst: Path) -> int:
+    n = 0
+    for f in sorted(src.rglob("*")):
+        if f.is_dir():
+            continue
+        t = dst / f.relative_to(src)
+        t.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(f, t)
+        n += 1
+    return n
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Re-sync .claude/ (agents, skills, commands) from the framework — OVERWRITES, so a project
+    picks up framework updates (init is create-if-absent and won't refresh them)."""
+    dest = Path(".").resolve()
+    n = 0
+    if AGENTS.exists():
+        n += _mirror_force(AGENTS, dest / ".claude" / "agents")
+    skills_root = PKG_ROOT / "skills"
+    if skills_root.exists():
+        for d in sorted(skills_root.iterdir()):
+            if d.is_dir():
+                n += _mirror_force(d, dest / ".claude" / "skills" / d.name)
+    commands_root = PKG_ROOT / "commands"
+    if commands_root.exists():
+        n += _mirror_force(commands_root, dest / ".claude" / "commands")
+    _log(dest, "sync", f"files={n}")
+    print(f"OK: re-synced {n} file(s) into .claude/ from the framework (agents, skills, commands).")
+    return 0
+
+
 def _union_lines(target: Path, incoming: str) -> None:
     """Additive union of lines (e.g., .gitignore)."""
     existing = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
@@ -929,26 +961,75 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage answers", f"{args.id} <- {args.answers}")
         print(f"  recorded answers from {args.answers} -> {assumptions_file}")
 
-    ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)"
-    if assumptions_file.exists():
-        ctx += ("\n\n## Resolved assumptions (decided by the Engagement Lead — treat as settled; "
-                "do NOT re-raise these)\n" + assumptions_file.read_text(encoding="utf-8"))
+    base_ctx = f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)"
+
+    def current_ctx() -> str:  # re-read assumptions each call so recorded answers take effect
+        c = base_ctx
+        if assumptions_file.exists():
+            c += ("\n\n## Resolved assumptions (decided by the Engagement Lead — treat as settled; "
+                  "do NOT re-raise these)\n" + assumptions_file.read_text(encoding="utf-8"))
+        return c
 
     def run(role: str, expect_json: bool = False) -> str:
-        out = _run_role(role, ctx, expect_json=expect_json)
+        out = _run_role(role, current_ctx(), expect_json=expect_json)
         (st / f"{role}.out").write_text(out, encoding="utf-8")
         _log(project, "engage", f"{args.id} {role}")
         return out
 
-    def gate(role: str, label: str) -> bool:
+    def _show_findings(data: dict) -> list[dict]:
+        findings = data.get("findings", []) if isinstance(data, dict) else []
+        for i, f in enumerate(findings, 1):
+            if not isinstance(f, dict):
+                continue
+            print(f"      {i}. {f.get('issue', f)}")
+            for opt in f.get("options", []):
+                print(f"           - option: {opt}")
+            if f.get("recommended"):
+                print(f"           ★ recommended: {f['recommended']}")
+        return findings
+
+    def _accept_recommended(findings: list[dict]) -> int:
+        recs = [f.get("recommended") for f in findings if isinstance(f, dict) and f.get("recommended")]
+        if not recs:
+            return 0
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with assumptions_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n## Auto-accepted recommended resolutions {stamp}\n"
+                     + "\n".join(f"- {r}" for r in recs) + "\n")
+        return len(recs)
+
+    def passing_gate(role: str, label: str, max_retry: int = 2) -> bool:
+        """Adversary gate that never dead-ends: on BLOCK it shows options + the recommended fix;
+        with --accept-recommended it records the recommended resolutions and retries (loop-forward)."""
+        for attempt in range(max_retry + 1):
+            out = run(role, expect_json=True)
+            try:
+                data = _json_loads(out)
+            except json.JSONDecodeError:
+                data = {}
+            ok = isinstance(data, dict) and data.get("verdict") == "PASS"
+            print(f"  {'✓' if ok else '⏸'} {label} {'PASS' if ok else 'BLOCK'}")
+            if ok:
+                return True
+            findings = _show_findings(data if isinstance(data, dict) else {})
+            if args.accept_recommended and attempt < max_retry and findings:
+                n = _accept_recommended(findings)
+                if n:
+                    print(f"    ↻ accepted {n} recommended resolution(s) → retrying {label}")
+                    continue
+            print(f"    → resolve & retry: write answers to a file then "
+                  f"`hssd engage {args.id} --answers <file>`, or rerun with `--accept-recommended` "
+                  f"(auto-take the recommended options). Full output in "
+                  f".harness/engagements/{args.id}/{role}.out")
+            return False
+        return False
+
+    def gate(role: str, label: str) -> bool:  # simple gate for the P4 fan-out (loops back to P3)
         out = run(role, expect_json=True)
         ok = _gate_ok(out)
         print(f"  {'✓' if ok else '⏸'} {label} {'PASS' if ok else 'BLOCK'}")
         if not ok:
             print(f"    {out}")
-            print(f"    → resolve & retry: write your answers to a file, then "
-                  f"`hssd engage {args.id} --answers <file>`  "
-                  f"(questions saved in .harness/engagements/{args.id}/{role}.out)")
         return ok
 
     def human(label: str) -> bool:
@@ -964,13 +1045,13 @@ def cmd_engage(args: argparse.Namespace) -> int:
 
     print(f"▶ engage {args.id} · {title}")
     print("P0 Intake"); run("product-analyst")
-    if not gate("definition-skeptic", "Definition Skeptic"):
+    if not passing_gate("definition-skeptic", "Definition Skeptic"):
         return 2
     print("P1 Stories & AC"); run("story-writer")
-    if not gate("ac-adversary", "AC Adversary"):
+    if not passing_gate("ac-adversary", "AC Adversary"):
         return 2
     print("P2 Architecture"); run("architect")
-    if not gate("architecture-adversary", "Architecture Adversary"):
+    if not passing_gate("architecture-adversary", "Architecture Adversary"):
         return 2
     if not human("SPEC LOCK (no code before this)"):
         print("Stopped at Spec Lock."); return 0
@@ -1027,6 +1108,9 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("path", nargs="?", default=".", help="repo to adopt (default: current dir)")
     pi.set_defaults(func=cmd_init)
 
+    psy = sub.add_parser("sync", help="re-sync .claude/ (agents, skills, commands) from the framework (overwrites)")
+    psy.set_defaults(func=cmd_sync)
+
     pt = sub.add_parser("template", help="list / import / register templates (blessed catalog + your own; any git URL)")
     pt.add_argument("action", choices=["list", "import", "add", "rm"])
     pt.add_argument("--from", dest="from_git", default=None, help="git URL (to import, or to register/remove)")
@@ -1061,6 +1145,9 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--answers", default=None,
                     help="file with the Lead's resolutions to a blocked gate (recorded as ADR "
                          "assumptions and reused on re-run, so agents stop re-raising them)")
+    pe.add_argument("--accept-recommended", action="store_true", dest="accept_recommended",
+                    help="on a blocked intake/AC/architecture gate, auto-take the adversary's "
+                         "recommended resolution and retry (graduated autonomy; loop-forward)")
     pe.set_defaults(func=cmd_engage)
 
     pj = sub.add_parser("janitor", help="discovery heartbeat — audit + dedup + file work items")
