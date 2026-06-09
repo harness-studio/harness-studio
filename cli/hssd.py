@@ -627,13 +627,31 @@ def _pm(project: Path) -> sqlite3.Connection:
         "status TEXT NOT NULL DEFAULT 'open', assignee TEXT, branch TEXT, lane TEXT, "
         "created_at TEXT NOT NULL, source TEXT, fingerprint TEXT)"
     )
-    for col in ("source TEXT", "fingerprint TEXT"):  # upgrade older DBs in place
+    # Sprints are the bounded, terminating unit of work; the PROJECT is long-lived and never 'done'.
+    # A sprint pulls a scope from the product backlog (work_items) and runs to closed.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS sprints ("
+        "id TEXT PRIMARY KEY, goal TEXT, status TEXT NOT NULL DEFAULT 'active', "
+        "opened_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    for col in ("source TEXT", "fingerprint TEXT", "sprint_id TEXT"):  # upgrade older DBs in place
         try:
             con.execute(f"ALTER TABLE work_items ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
     con.commit()
     return con
+
+
+def _current_sprint(con: sqlite3.Connection) -> tuple | None:
+    """The latest sprint that hasn't closed (the one you're iterating in), or None."""
+    try:
+        return con.execute(
+            "SELECT id, goal, status FROM sprints WHERE status != 'closed' "
+            "ORDER BY opened_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
 
 
 def _slug(s: str) -> str:
@@ -663,7 +681,18 @@ def _arch_lock_path(project: Path) -> Path:
 
 
 def _adr_path(project: Path) -> Path:
-    return project / "docs" / "ADR.md"
+    return project / "docs" / "ADR.md"  # the LIVING, current architecture (canonical name)
+
+
+def _adr_versions_dir(project: Path) -> Path:
+    return project / "docs" / "adr"  # immutable snapshots: ADR-v1.md, ADR-v2.md, ...
+
+
+def _next_adr_version(project: Path) -> int:
+    d = _adr_versions_dir(project)
+    existing = [int(m.group(1)) for f in d.glob("ADR-v*.md")
+                if (m := re.match(r"ADR-v(\d+)\.md$", f.name))] if d.exists() else []
+    return (max(existing) + 1) if existing else 1
 
 
 def _architecture_locked(project: Path) -> bool:
@@ -684,53 +713,81 @@ def _adr_is_stub(body: str) -> bool:
     return all(placeholder.match(ln) for ln in content)
 
 
-_STATE_ORDER = ["initialized", "briefed", "architected", "planned", "in_progress", "delivered"]
-_NEXT_CMD = {
-    "initialized": "hssd init",
-    "briefed": "hssd overview add <brief.md>  →  hssd overview analyze",
-    "architected": "hssd overview architect  →  (iterate)  →  hssd architecture approve",
-    "planned": "hssd overview split",
-    "in_progress": "hssd engage <LOC-id>",
-    "delivered": "— all work items delivered —",
-}
+# The PROJECT state machine is NON-TERMINAL: after the foundation it enters 'operational' and stays
+# there for life (development → deploy → maintenance → more features). What terminates is a SPRINT.
+_STATE_ORDER = ["initialized", "briefed", "architected", "planned", "operational"]
 
 
 def _project_state(project: Path) -> dict:
-    """Infer the project phase from artifacts on disk + the architecture lock."""
+    """Infer the project phase + the current sprint. The project never reaches a terminal 'done':
+    once a sprint has been opened it is 'operational' forever. Sprints are what carry deliverables."""
     h = project / ".harness"
     s = {
         "initialized": h.exists(),
         "briefed": (h / "overview.md").exists(),
         "architected": _architecture_locked(project),
-        "planned": False,
-        "in_progress": False,
-        "delivered": False,
+        "planned": False,       # product backlog exists (analyze + split done)
+        "operational": False,   # ≥1 sprint ever opened — the live, never-ending state
     }
+    sprint = None
+    sprint_items: list[str] = []
     pm = h / "pm.sqlite"
     if pm.exists():
         con = sqlite3.connect(pm)
         try:
-            statuses = [r[0] for r in con.execute("SELECT status FROM work_items")]
+            n_items = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+            n_sprints = con.execute("SELECT COUNT(*) FROM sprints").fetchone()[0]
+            sprint = _current_sprint(con)
+            if sprint:
+                sprint_items = [r[0] for r in con.execute(
+                    "SELECT status FROM work_items WHERE sprint_id=?", (sprint[0],))]
         except sqlite3.OperationalError:
-            statuses = []
+            n_items = n_sprints = 0
         finally:
             con.close()
-        if statuses:
-            s["planned"] = True
-            s["in_progress"] = any(st in ("in-progress", "done") for st in statuses)
-            s["delivered"] = all(st == "done" for st in statuses)
-    # The phase = the first unmet ACTIONABLE step. 'delivered' is terminal (an achievement, not a
-    # step you do), so once every actionable milestone is reached you stay 'in_progress' until all
-    # work items are done. This keeps the fleet anomaly visible (a False before a later True surfaces
-    # as the phase to fix) without mislabelling a mid-engagement project as 'delivered'.
-    actionable = ["initialized", "briefed", "architected", "planned", "in_progress"]
-    current = next((m for m in actionable if not s[m]), None)
-    if current is None:
-        current = "delivered" if s["delivered"] else "in_progress"
-    s["phase"] = current
-    # anomaly: a backlog exists but the architecture was never locked (planned ahead of architecture)
+        s["planned"] = n_items > 0
+        s["operational"] = s["architected"] and n_sprints > 0
+    # phase = the furthest milestone reached; 'operational' is the final, INFINITE state (no terminal)
+    if not s["initialized"]:
+        phase = "uninitialized"
+    elif not s["briefed"]:
+        phase = "initialized"
+    elif not s["architected"]:
+        phase = "briefed"
+    elif not s["operational"]:
+        phase = "planned" if s["planned"] else "architected"
+    else:
+        phase = "operational"
+    s["phase"] = phase
     s["stale_plan"] = s["planned"] and not s["architected"]
+    s["sprint"] = sprint            # (id, goal, status) or None
+    s["sprint_items"] = sprint_items
     return s
+
+
+def _project_next(project: Path, s: dict) -> str:
+    """The single next command, given the project phase and the current sprint."""
+    phase = s["phase"]
+    base = {
+        "uninitialized": "hssd init",
+        "initialized": "hssd overview add <brief.md>",
+        "briefed": "hssd overview architect  →  hssd architecture approve",
+        "architected": "hssd overview analyze  →  hssd overview split",
+        "planned": "hssd sprint plan   (open the first sprint)",
+    }
+    if phase in base:
+        return base[phase]
+    # operational: the next move depends on the current sprint
+    sprint = s["sprint"]
+    if not sprint:
+        return "hssd sprint plan   (open the next iteration / maintenance round)"
+    _sid, _goal, sstatus = sprint
+    if sstatus == "review":
+        return "hssd sprint close"
+    items = s["sprint_items"]
+    if items and all(x == "done" for x in items):
+        return "hssd sprint review"
+    return "hssd engage <LOC-id>   (a story in this sprint)"
 
 
 def _write_state_snapshot(project: Path, s: dict) -> None:
@@ -738,37 +795,42 @@ def _write_state_snapshot(project: Path, s: dict) -> None:
     p = project / ".harness" / "state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     snap = {"phase": s["phase"], "milestones": {k: s[k] for k in _STATE_ORDER},
+            "sprint": list(s["sprint"]) if s.get("sprint") else None,
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
     p.write_text(json.dumps(snap, indent=2), encoding="utf-8")
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Show the project state machine, the current step, and the next command to run."""
+    """Show the project state machine (foundation → operational, never 'done') + the current sprint."""
     project = Path(".").resolve()
     s = _project_state(project)
     _write_state_snapshot(project, s)
     print("Harness Studio · project state\n")
     rows = [
-        ("initialized", "initialized", "repo adopted (hssd init)"),
+        ("initialized", "initialized", "repo adopted"),
         ("briefed", "briefed", "overview captured"),
         ("architected", "architected", "architecture locked (human)"),
-        ("planned", "planned", "backlog split into work items"),
-        ("in_progress", "in progress", "engagements running"),
-        ("delivered", "delivered", "all work items done"),
+        ("planned", "planned", "product backlog split"),
+        ("operational", "operational", "live — runs sprints, never 'done'"),
     ]
     for key, label, desc in rows:
         mark = "✓" if s[key] else ("▸" if s["phase"] == key else "·")
-        here = "   ← you are here" if s["phase"] == key else ""
+        here = "   ← project is here" if s["phase"] == key else ""
         print(f"  {mark} {label:<13}{desc}{here}")
-    print()
     if s["stale_plan"]:
-        print("  ⚠ a backlog exists but the architecture was never locked — it was planned ahead of")
-        print("    architecture. Lock it, then re-split so stories inherit the ADR:")
-        print("      hssd overview architect → hssd architecture approve → hssd reset --backlog → split\n")
-    nxt = _NEXT_CMD[s["phase"]]
-    if s["phase"] == "planned" and not (project / ".harness" / "plan.json").exists():
-        nxt = "hssd overview analyze  →  hssd overview split"  # plan was wiped (e.g. reset --backlog)
-    print(f"  next: {nxt}")
+        print("\n  ⚠ backlog built before the architecture lock — re-split so stories inherit the ADR:")
+        print("      hssd architecture approve → hssd reset --backlog → analyze → split")
+    sprint = s["sprint"]
+    print()
+    if sprint:
+        sid, goal, sstatus = sprint
+        items = s["sprint_items"]
+        done = sum(1 for x in items if x == "done")
+        print(f"  ▶ sprint {sid} · {goal or '(no goal)'} — {sstatus.upper()}  "
+              f"[{done}/{len(items)} done]")
+    elif s["operational"] or s["planned"]:
+        print("  (no open sprint)")
+    print(f"\n  next: {_project_next(project, s)}")
     return 0
 
 
@@ -785,9 +847,13 @@ def cmd_architecture(args: argparse.Namespace) -> int:
                   "`hssd architecture approve`.")
             return 0
         meta = json.loads(lock.read_text(encoding="utf-8"))
-        print(f"architecture: LOCKED {meta.get('locked_at', '?')} (by {meta.get('by', '?')})")
+        ver = meta.get("version")
+        vstr = f" · v{ver}" if ver else ""
+        print(f"architecture: LOCKED{vstr} {meta.get('locked_at', '?')} (by {meta.get('by', '?')})")
+        if ver:
+            print(f"  current: docs/ADR.md   snapshot: docs/adr/ADR-v{ver}.md")
         if _file_sha(adr) != meta.get("adr_sha256", ""):
-            print("  ⚠ docs/ADR.md changed since the lock — re-approve to re-lock (or it's stale).")
+            print("  ⚠ docs/ADR.md changed since the lock — re-approve to cut a new version (or it's stale).")
         return 0
 
     if args.action == "reopen":
@@ -809,15 +875,116 @@ def cmd_architecture(args: argparse.Namespace) -> int:
         print("BLOCK: docs/ADR.md still looks like a stub. Fill in the data model, ownership, tier "
               "and key decisions before approving.", file=sys.stderr)
         return 1
+    # Snapshot an immutable version (audit trail of how the architecture evolved across sprints),
+    # then retire the scratch draft so only the living docs/ADR.md + the versions remain.
+    version = _next_adr_version(project)
+    vdir = _adr_versions_dir(project)
+    vdir.mkdir(parents=True, exist_ok=True)
+    (vdir / f"ADR-v{version}.md").write_text(adr.read_text(encoding="utf-8"), encoding="utf-8")
+    (project / "docs" / "ADR.draft.md").unlink(missing_ok=True)  # proposal consumed; no stale draft
     _locks_dir(project).mkdir(parents=True, exist_ok=True)
     meta = {"locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "by": os.environ.get("USER") or os.environ.get("USERNAME") or "engineer",
-            "adr_path": "docs/ADR.md", "adr_sha256": _file_sha(adr)}
+            "version": version, "adr_path": "docs/ADR.md",
+            "snapshot": f"docs/adr/ADR-v{version}.md", "adr_sha256": _file_sha(adr)}
     lock.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    _log(project, "architecture approve", meta["adr_sha256"][:12])
-    print("✓ architecture LOCKED. docs/ADR.md is now the shared contract for every story.")
-    print("  next: hssd overview split   (stories inherit the ADR)")
+    _log(project, "architecture approve", f"v{version} {meta['adr_sha256'][:12]}")
+    print(f"✓ architecture LOCKED · v{version}. docs/ADR.md is the living contract; "
+          f"docs/adr/ADR-v{version}.md is the immutable snapshot.")
+    print("  next: hssd overview analyze → split   (stories inherit the ADR)")
     return 0
+
+
+def cmd_sprint(args: argparse.Namespace) -> int:
+    """Sprints — the bounded, terminating unit of delivery. The PROJECT never finishes; sprints do.
+    plan → (engage the stories) → review (fix-the-harness retro) → close. A sprint pulls its scope
+    from the product backlog (work items not yet assigned to any sprint)."""
+    project = Path(".").resolve()
+    con = _pm(project)
+
+    if args.action == "status":
+        cur = _current_sprint(con)
+        if not cur:
+            closed = con.execute("SELECT COUNT(*) FROM sprints WHERE status='closed'").fetchone()[0]
+            print(f"No open sprint ({closed} closed). Open one with `hssd sprint plan`.")
+            return 0
+        sid, goal, sstatus = cur
+        print(f"sprint {sid} · {goal or '(no goal)'} — {sstatus.upper()}")
+        for r in con.execute(
+                "SELECT id, title, status FROM work_items WHERE sprint_id=? ORDER BY id", (sid,)):
+            mark = {"done": "✓", "in-progress": "▸"}.get(r[2], "·")
+            print(f"  {mark} {r[0]}  {r[1]}  [{r[2]}]")
+        return 0
+
+    if args.action == "plan":
+        if not _architecture_locked(project):
+            print("BLOCK: lock the architecture first (hssd overview architect → approve).",
+                  file=sys.stderr)
+            return 1
+        open_cur = _current_sprint(con)
+        if open_cur:
+            print(f"BLOCK: sprint {open_cur[0]} is still '{open_cur[2]}'. Close it "
+                  "(hssd sprint review → close) before opening another.", file=sys.stderr)
+            return 1
+        scope = [r[0] for r in con.execute(
+            "SELECT id FROM work_items WHERE sprint_id IS NULL AND status != 'done' "
+            "AND (lane IS NULL OR lane != 'config')")]
+        if not scope:
+            print("BLOCK: nothing to plan — no unassigned open items in the backlog. Split the brief "
+                  "or add items (hssd work add / janitor) first.", file=sys.stderr)
+            return 1
+        sid = f"SPR-{con.execute('SELECT COUNT(*) FROM sprints').fetchone()[0] + 1}"
+        con.execute("INSERT INTO sprints(id, goal, status, opened_at) VALUES(?,?,'active',?)",
+                    (sid, args.goal or "", datetime.datetime.now(datetime.timezone.utc).isoformat()))
+        con.executemany("UPDATE work_items SET sprint_id=? WHERE id=?", [(sid, i) for i in scope])
+        con.commit()
+        _log(project, "sprint plan", f"{sid} scope={len(scope)}")
+        print(f"▶ opened {sid} · {args.goal or '(no goal)'} with {len(scope)} item(s): "
+              f"{', '.join(scope)}")
+        print("\n  Architecture-delta check: if any item needs a NEW table/entity or isolation rule, "
+              "amend FIRST — `hssd architecture reopen` → edit docs/ADR.md → approve (cuts v+1). "
+              "If it all fits the locked ADR, just engage.")
+        print(f"  next: hssd engage {scope[0]}")
+        return 0
+
+    if args.action == "review":
+        cur = _current_sprint(con)
+        if not cur:
+            print("BLOCK: no open sprint to review.", file=sys.stderr)
+            return 1
+        sid = cur[0]
+        pending = [i for i, st in con.execute(
+            "SELECT id, status FROM work_items WHERE sprint_id=?", (sid,)) if st != "done"]
+        if pending and not args.force:
+            print(f"BLOCK: {len(pending)} item(s) not done: {', '.join(pending)}. Finish them "
+                  "(hssd engage <id>) or --force.", file=sys.stderr)
+            return 1
+        con.execute("UPDATE sprints SET status='review' WHERE id=?", (sid,))
+        con.commit()
+        _log(project, "sprint review", sid)
+        print(f"sprint {sid} → REVIEW. Retro (fix-the-harness): for every defect that ESCAPED a gate "
+              "this sprint, add a guard so it can't recur — that is the framework's core loop.")
+        print("  then: hssd sprint close")
+        return 0
+
+    if args.action == "close":
+        cur = _current_sprint(con)
+        if not cur:
+            print("BLOCK: no open sprint to close.", file=sys.stderr)
+            return 1
+        sid, _goal, sstatus = cur
+        if sstatus != "review" and not args.force:
+            print(f"BLOCK: {sid} is '{sstatus}', not 'review'. Run `hssd sprint review` first "
+                  "(or --force).", file=sys.stderr)
+            return 1
+        con.execute("UPDATE sprints SET status='closed', closed_at=? WHERE id=?",
+                    (datetime.datetime.now(datetime.timezone.utc).isoformat(), sid))
+        con.commit()
+        _log(project, "sprint close", sid)
+        print(f"✓ sprint {sid} CLOSED — increment shipped. The project stays operational; open the "
+              "next round with `hssd sprint plan`.")
+        return 0
+    return 1
 
 
 def cmd_work(args: argparse.Namespace) -> int:
@@ -1431,14 +1598,25 @@ def cmd_engage(args: argparse.Namespace) -> int:
         _log(project, "engage", f"{args.id} config-enabled")
         print(f"✓ {args.id} enabled (config) — status=done")
         return 0
-    # No story engineers before the architecture gate (config/standing are exempt — config is
-    # auto-provided, and the ADR itself is a standing artifact, so requiring its own lock is circular).
-    if (lane or "feature") not in ("config", "standing") and not _architecture_locked(project) \
-            and not args.force:
-        print("BLOCK: architecture is not locked — no story engages before the architecture gate. "
-              "Run `hssd overview architect` then `hssd architecture approve` first "
-              "(or --force to override).", file=sys.stderr)
-        return 1
+    # No story engineers before the architecture gate, and feature work happens INSIDE a sprint
+    # (config/standing exempt — config is auto-provided; the ADR/README are continuous governance).
+    if (lane or "feature") not in ("config", "standing") and not args.force:
+        if not _architecture_locked(project):
+            print("BLOCK: architecture is not locked — no story engages before the architecture gate. "
+                  "Run `hssd overview architect` then `hssd architecture approve` (or --force).",
+                  file=sys.stderr)
+            return 1
+        srow = con.execute("SELECT sprint_id FROM work_items WHERE id=?", (args.id,)).fetchone()
+        sp = srow[0] if srow else None
+        cur = _current_sprint(con)
+        if not sp:
+            print(f"BLOCK: {args.id} is in the backlog, not a sprint. Pull it into one first: "
+                  "`hssd sprint plan` (or --force).", file=sys.stderr)
+            return 1
+        if not cur or cur[0] != sp:
+            print(f"BLOCK: {args.id} belongs to {sp}, which isn't the active sprint (or it's closed). "
+                  "Re-plan or resume that sprint (or --force).", file=sys.stderr)
+            return 1
     if status == "open":
         # Auto-claim (atomic compare-and-swap) so engage is one step; keeps the branch discipline.
         branch = f"harness/local-{args.id.lower()}-{_slug(title)}"
@@ -1723,6 +1901,13 @@ def main(argv: list[str] | None = None) -> int:
                            help="the human lock over the shared architecture (approve / status / reopen)")
     parch.add_argument("action", choices=["approve", "status", "reopen"])
     parch.set_defaults(func=cmd_architecture)
+
+    psp = sub.add_parser("sprint",
+                         help="iterations: plan / status / review / close (the project never ends; sprints do)")
+    psp.add_argument("action", choices=["plan", "status", "review", "close"])
+    psp.add_argument("--goal", default="", help="the sprint goal (for plan)")
+    psp.add_argument("--force", action="store_true", help="override a precondition")
+    psp.set_defaults(func=cmd_sprint)
 
     pw = sub.add_parser("work", help="work items via the PM Port (local SQLite or synced PM)")
     pw.add_argument("action", choices=["add", "list", "show", "claim"])
