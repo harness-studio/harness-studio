@@ -11,6 +11,7 @@
 - **Early returns.** Guard clauses over deep nesting. No arrow code.
 - **Style consistency (paradigm lock).** Pick a paradigm per module/project — **object-oriented or functional** — and follow it. No mixing styles in the same unit. The chosen paradigm is recorded and enforced; inconsistency is a finding.
 - **Atomic, story-telling commits.** Commits are grouped by logical operation and tell the history of *what was done and why*. A reviewer reads the commit log and understands the sequence of operations. No "wip", no dumping unrelated changes in one commit.
+- **No unexplained acronyms or jargon (clarity is the writer's job).** No abbreviation ships without an explanation (PHILOSOPHY tenet 10). The rule scales with the text: **short texts** (slides, labels, role cards, READMEs' first mention) **spell the term out inline** — e.g., "Acceptance Criteria (AC)", "SQL injection", "create/read/update/delete (CRUD)". **Long or repetitive documents** keep the short form for readability but **define every term once in [`GLOSSARY.md`](GLOSSARY.md)** and link to it. A reader should never need to already know the vocabulary. An undefined acronym is a finding, the same as an untested guarantee.
 
 ## 2. Security first (non-negotiable)
 
@@ -81,6 +82,7 @@ Standards without enforcement are wishes. Each maps to a mechanism:
 | Python typing / no `Optional` | ruff rule (blocks) |
 | OpenAPI quality | Spectral linter gate |
 | Branch/work-item discipline | pre-commit hook (see `WORK-INTAKE-AND-CLAIMING.md`) |
+| No unexplained acronyms | first-use expansion (short texts) + `GLOSSARY.md` (long docs); doc linter (future) |
 
 ## 6. Model tiering by definition-level
 

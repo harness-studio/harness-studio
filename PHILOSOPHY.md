@@ -28,6 +28,8 @@ So: we choose constraint on purpose. If that makes the framework limited, good �
 
 9. **Fix the harness, not the code.** When something is wrong, the fix is a new validation, linter, gate, or skill — so the framework gets it right *next time* — never just a one-off patch. The operator's primary work is **writing harness** (skills, gates, validations), not final code. Patching the same class of error forever is exactly the failure mode this framework exists to escape; every correction must harden the system.
 
+10. **No unexplained acronyms or jargon.** Clarity is owned by the writer, the same way correctness is owned by the maker. Every abbreviation is either spelled out on first use or defined in the [glossary](GLOSSARY.md) — a reader never has to already know the vocabulary to follow the work. Short texts (slides, role cards, a one-line label) expand the term inline; long or repetitive documents carry a glossary and link to it. "The reader will figure it out" is not an acceptable default; an undefined acronym is a defect, like an untested guarantee.
+
 ## What this is NOT
 
 - Not a Swiss-army knife. Breadth is a non-goal.

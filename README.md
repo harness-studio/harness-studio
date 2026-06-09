@@ -28,9 +28,16 @@ Both share one root: letting *the maker grade its own work*. Harness Studio fixe
 Requires **Python 3.12**.
 
 ```bash
+# install straight from GitHub (no clone needed)
+uv tool install git+https://github.com/gabrielbioinfo/harness-studio
+hssd --help
+```
+
+Or, to hack on the framework itself, clone and install editable:
+
+```bash
 # from the repo root
 uv tool install --editable .      # or: pipx install -e .
-hssd --help
 ```
 
 This puts `hssd` (short) and `harness-sd` (long) on your PATH.
@@ -104,10 +111,13 @@ You don't prompt the steps — you design the loops and decide at the leverage p
 - **Adversarial** — the author never judges their own "done"; independent adversaries try to break it. ([`01-ROLES.md`](01-ROLES.md))
 - **Spec-driven** — no code before the spec/ADR is locked (Spec Lock). ([`STANDARDS.md`](STANDARDS.md))
 - **Opinionated** — one blessed way; escape hatches are documented or absent. ([`PHILOSOPHY.md`](PHILOSOPHY.md))
-- **PM Port** — one interface for work items; local SQLite spine by default, robust PMs (GitHub/GitLab/ADO) attach as sync adapters. ([`WORK-INTAKE-AND-CLAIMING.md`](WORK-INTAKE-AND-CLAIMING.md))
+- **PM Port** — one interface for work items; local SQLite spine by default, robust project-management tools (GitHub, GitLab, Azure DevOps) attach as sync adapters. ([`WORK-INTAKE-AND-CLAIMING.md`](WORK-INTAKE-AND-CLAIMING.md))
 - **Templates as git repos** — additive merge, conflict resolution with memory. ([`TEMPLATES.md`](TEMPLATES.md))
 - **Skills** — blessed conventions per technology, routed by description. ([`skills/`](skills))
 - **Right-sizing** — quality invariants never scale; scope, stack tier, and ceremony do.
+- **Plain language** — no unexplained acronyms; every term is spelled out or defined in the [`GLOSSARY.md`](GLOSSARY.md). ([`PHILOSOPHY.md`](PHILOSOPHY.md) tenet 10)
+
+> New here? The [**glossary**](GLOSSARY.md) defines every term and abbreviation used across the framework.
 
 ---
 
@@ -116,6 +126,7 @@ You don't prompt the steps — you design the loops and decide at the leverage p
 ```
 harness-studio/
   README.md                 # you are here
+  GLOSSARY.md               # every term & acronym, defined (tenet 10)
   PHILOSOPHY.md             # the soul — why it's opinionated
   ARCHITECTURE.md           # layering on Archon, agent mechanisms, skill routing, delivery
   LOOPS.md                  # loop engineering — the engagement & janitor loops
