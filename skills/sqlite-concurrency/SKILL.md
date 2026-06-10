@@ -26,6 +26,41 @@ SQLite has **one writer at a time**. Correctness under concurrency comes from le
 - **An async transaction spanning multiple `await`s on a pooled driver** → propose collapsing the transaction into a single executor call.
 - **No `busy_timeout` / no WAL** → propose setting both at connection init.
 - **`datetime.now()` / app-level mutex (`asyncio.Lock`) to serialize writes** → propose the DB-level mechanism (atomic SQL / `BEGIN IMMEDIATE`); an in-process lock breaks under multiple workers/processes.
+- **A bootstrap that switches a fresh DB to WAL, callable concurrently in-process** → guard it with a module-level `threading.Lock` (the WAL-switch lock bypasses `busy_timeout` — see below).
+
+## WAL pragma cold-start: the Windows / busy_timeout blind spot
+
+`PRAGMA journal_mode=WAL` on a **fresh file** (still in DELETE mode) needs an **exclusive lock** to rewrite the file header — and that lock is taken on a path that **bypasses `busy_timeout`** in CPython's `sqlite3` on Windows (and some Linux/tmpfs setups). So when N threads simultaneously open the same brand-new database and each issues `PRAGMA journal_mode=WAL`, N-1 get `OperationalError: database is locked` **immediately** — not after the 5 s timeout. `busy_timeout` (PRAGMA or `connect(timeout=…)`) does **not** protect this path. (Known CPython `sqlite3`/SQLite limitation — confirm on your platform; it bit the fleet-telemetry bootstrap stress test on Windows.)
+
+### The fix: serialize `init_db` in-process with a module-level `threading.Lock`
+
+```python
+_init_lock = threading.Lock()   # module-level, one per process
+
+def init_db(path=None):
+    """Serialize in-process: the WAL switch on a fresh file bypasses busy_timeout on Windows."""
+    with _init_lock:
+        conn = connect(path)
+        try:
+            _create_schema(conn)
+            _seed_zones(conn)
+        finally:
+            conn.close()
+```
+
+This is **not** the anti-pattern "use an app-level mutex instead of DB-level atomics" — it guards the **bootstrap** (a one-time write to the file header), where the DB-level mechanism silently fails on this platform. The distinction:
+
+| | `threading.Lock` in `init_db` | `asyncio.Lock` around business writes |
+|---|---|---|
+| **Guards** | the one-time WAL file-header switch at startup | ongoing business-data writes |
+| **Breaks under multiple workers?** | No — each process bootstraps itself | Yes — the lock is per-process, invisible across workers |
+| **Verdict** | **Blessed** for `init_db`-class routines | **Anti-pattern** — use `BEGIN IMMEDIATE` instead |
+
+Cross-process cold-start (two workers starting against the same file) still needs `BEGIN IMMEDIATE` + `busy_timeout`; the `threading.Lock` only covers threads within one process.
+
+### Detection heuristic
+
+A concurrency stress test (`ThreadPoolExecutor` / `multiprocessing`) that fails in **under 1 s** despite `busy_timeout=5000` is almost always this WAL cold-start race, not a `BEGIN IMMEDIATE` race. The tell: the failure count equals N-1 (every thread except the first), raised before any seed SQL runs.
 
 ## Review checklist
 
@@ -35,3 +70,4 @@ SQLite has **one writer at a time**. Correctness under concurrency comes from le
 - [ ] No `INSERT OR REPLACE`; upserts use `ON CONFLICT DO UPDATE`.
 - [ ] Every mutable column has one documented writer; no dual-writer races.
 - [ ] Concurrency guarantees are covered by a **stress test** (N concurrent tasks → asserted invariant), not a happy-path test.
+- [ ] Any bootstrap that switches a fresh DB to WAL and can run concurrently in-process is guarded by a module-level `threading.Lock` (the WAL-switch lock bypasses `busy_timeout`).
