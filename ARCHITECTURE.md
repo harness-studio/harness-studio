@@ -15,15 +15,22 @@
 ┌─────────────────────────────────────────────────────────┐
 │  HARNESS STUDIO  (this framework — opinionated)         │
 │  • roles (specialists + adversaries)                    │
-│  • the 6-phase engagement process + gates               │
-│  • Definition-of-Done method                            │
+│  • the project state machine (→ operational, never done)│
+│  • the human architecture gate + versioned ADR lock     │
+│  • the 6-phase engagement process + TDD red→green gate  │
+│  • sprints (bounded delivery; the project lives on)     │
+│  • engineering skills as find-and-propose guards        │
 │  • ADR / AI-log / stories templates                     │
 │  • the continuous codebase-health "janitor"            │
 │                                                         │
 │  THE hssd CLI  (the engine — runs the whole loop)       │
-│  • cmd_engage: the 6-phase loop in Python               │
+│  • cmd_status: the project state machine                │
+│  • cmd_architecture: the human ADR lock (versioned)     │
+│  • cmd_sprint: plan / review / close iterations         │
+│  • cmd_engage: the 6-phase loop (P3a Red → P3b Green)   │
 │  • PM Port: local SQLite spine (.harness/pm.sqlite)     │
 │  • git branches as locks  • scheduled tasks             │
+│  • bounded loop-forward (--max-calls / --budget)        │
 │  • role→skill scoping (ROLE_SKILLS / per-phase)         │
 └───────────────────────────┬─────────────────────────────┘
                             │  invokes (claude -p)
@@ -37,17 +44,20 @@
 
 ## Why self-contained, not bolted onto a runtime
 
-- **The CLI owns execution:** the 6-phase loop lives in `cli/hssd.py` (`cmd_engage`), the project-management state in a local SQLite spine (`.harness/pm.sqlite`), engagement isolation via git branches (branch-as-lock), and "always-on" cadence via scheduled tasks. No external workflow engine to reimplement or depend on.
+- **The CLI owns execution:** the project state machine (`cmd_status`: initialized → briefed → architected → planned → operational, never terminal), the human architecture gate (`cmd_architecture`: propose → iterate → lock a versioned, immutable ADR), the sprint loop (`cmd_sprint`: plan/review/close), and the 6-phase engagement loop (`cmd_engage`, with the enforced P3a Red → P3b Green TDD split) all live in `cli/hssd.py`. The project-management state sits in a local SQLite spine (`.harness/pm.sqlite`), engagement isolation via git branches (branch-as-lock), and "always-on" cadence via scheduled tasks. No external workflow engine to reimplement or depend on.
 - **Harness Studio owns opinion:** *which* roles exist, *which* gates are adversarial, *what* "done" means, *how* the ADR and AI log are produced, *how* autonomy graduates. That opinion is the IP — and the same CLI enforces it.
 - **One moving part:** the CLI invokes agents via `claude -p` (real agents) or a deterministic `mock` backend (tests). The method and the engine that runs it ship together, so a run is reproducible from the repo alone.
 
 ## What "super-powers" means concretely
 
 Dropping Harness Studio into a project adds:
-- A **governed engagement workflow** (idea/brief → delivery) with adversarial verification baked in.
+- A **project state machine** (initialized → briefed → architected → planned → operational) that never terminates — the project lives in operation/maintenance, delivering through bounded **sprints**.
+- A **human architecture gate**: the system proposes the ADR, an adversary advises, and the engineer locks it as an immutable, versioned decision (`docs/adr/ADR-vN.md`) before any decomposition or build.
+- A **governed engagement workflow** (idea/brief → delivery) with adversarial verification baked in — and an **enforced TDD red→green gate** (a `test-author` writes failing tests from the locked criteria, the CLI runs them, the builder makes them pass).
 - **Pre-built roles** (specialists + adversaries) instead of ad-hoc prompting.
-- **Integrity gates** that prevent fixing one thing and breaking another (full-suite gate, lock-the-bug test, regression hunter).
-- **Auto-generated governance artifacts** (ADR, AI Interaction Log) as first-class outputs.
+- **Engineering skills as find-and-propose guards** (`sqlite-concurrency`, `sql-indexing`, `datetime-utc`, `api-conventions`, `resilience`, `push-over-pull`) — each a once-caught defect turned into a standing check the adversaries apply.
+- **Integrity gates** that prevent fixing one thing and breaking another (full-suite gate, lock-the-bug test, regression hunter), all under a **bounded loop-forward** ceiling so a gate converges instead of looping forever.
+- **Auto-generated governance artifacts** (ADR, AI Interaction Log) as first-class, continuously-captured outputs.
 - A **continuous codebase-health auditor** (the "janitor") that finds issues and files them as well-formed work items.
 
 ## The three agent mechanisms (and which phase uses which)
