@@ -113,13 +113,17 @@ CLAUDE_SETTINGS_LOCAL = json.dumps({
     "permissions": {
         "allow": [
             "Read", "Glob", "Grep", "Edit", "Write",
+            "Bash(hssd *)", "Bash(harness-sd *)",  # let the human drive hssd via Claude Code unprompted
             "Bash(uv *)", "Bash(uvx *)", "Bash(python *)", "Bash(python3 *)",
             "Bash(pytest *)", "Bash(ruff *)", "Bash(npm *)", "Bash(npx *)", "Bash(node *)",
             "Bash(git add *)", "Bash(git commit *)", "Bash(git status*)", "Bash(git diff*)",
             "Bash(ls *)", "Bash(cat *)", "Bash(mkdir *)", "Bash(mv *)", "Bash(cp *)", "Bash(echo *)",
         ],
+        # Recursion of NESTED build agents is prevented by the Isolation guard in their composed
+        # prompt (not by denying hssd here, which would also block the human driving hssd via Claude
+        # Code — the project settings are shared by both).
         "deny": [
-            "Bash(rm -rf *)", "Bash(sudo *)", "Bash(hssd*)", "Bash(harness-sd*)",
+            "Bash(rm -rf *)", "Bash(sudo *)",
             "Bash(git push*)", "Bash(git reset --hard*)",
             "Read(.env)", "Read(.env.*)", "Read(**/.env)",
             "Write(.env)", "Write(.env.*)", "Write(.git/**)",
@@ -1070,6 +1074,22 @@ def cmd_work(args: argparse.Namespace) -> int:
     if args.action == "show":
         r = con.execute("SELECT * FROM work_items WHERE id=?", (args.id,)).fetchone()
         print(r if r else f"{args.id} not found")
+        return 0
+
+    if args.action == "done":
+        # State primitive for the MAESTRO runner: mark a story delivered after it ran the phases
+        # (red→green, P4 dry) and the human approved merge. The CLI runner (`hssd engage`) sets this
+        # itself; the maestro calls it here so both runners record completion on the same spine.
+        if not args.id:
+            print("BLOCK: work done needs <id>", file=sys.stderr)
+            return 1
+        if not con.execute("SELECT 1 FROM work_items WHERE id=?", (args.id,)).fetchone():
+            print(f"BLOCK: {args.id} not found", file=sys.stderr)
+            return 1
+        con.execute("UPDATE work_items SET status='done' WHERE id=?", (args.id,))
+        con.commit()
+        _log(project, "work done", args.id)
+        print(f"OK: {args.id} marked done.")
         return 0
 
     # claim — atomic compare-and-swap on status (race-safe on the local spine)
@@ -2033,7 +2053,7 @@ def main(argv: list[str] | None = None) -> int:
     psp.set_defaults(func=cmd_sprint)
 
     pw = sub.add_parser("work", help="work items via the PM Port (local SQLite or synced PM)")
-    pw.add_argument("action", choices=["add", "list", "show", "claim"])
+    pw.add_argument("action", choices=["add", "list", "show", "claim", "done"])
     pw.add_argument("id", nargs="?")
     pw.add_argument("--title", default="")
     pw.add_argument("--type", default="feature")
