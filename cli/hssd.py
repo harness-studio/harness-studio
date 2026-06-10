@@ -695,6 +695,16 @@ def _next_adr_version(project: Path) -> int:
     return (max(existing) + 1) if existing else 1
 
 
+def _strip_to_heading(text: str) -> str:
+    """Drop any leading narration an agent prefaces before the actual Markdown (the ADR starts at
+    the first heading). Keeps the saved proposal clean instead of carrying 'Here is the ADR:' prose."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("#"):
+            return "\n".join(lines[i:]).strip() + "\n"
+    return text.strip() + "\n"
+
+
 def _architecture_locked(project: Path) -> bool:
     return _arch_lock_path(project).exists()
 
@@ -1435,15 +1445,23 @@ def cmd_overview(args: argparse.Namespace) -> int:
         )
         docs = project / "docs"
         docs.mkdir(parents=True, exist_ok=True)
+        draft = _strip_to_heading(draft)  # drop any narration before the ADR markdown
         (docs / "ADR.draft.md").write_text(draft, encoding="utf-8")
-        # Seed docs/ADR.md with the proposal when it's absent OR still the init template stub (a stub
-        # is not human work to protect). Only a real, curated ADR.md is preserved (draft-only) so the
-        # engineer's edits are never clobbered.
+        # Refresh docs/ADR.md with the new proposal UNLESS the engineer has hand-edited it. We write
+        # ADR.md when it's absent, still the init stub, OR byte-identical to the last proposal we
+        # emitted (untouched architect output — re-running architect should keep improving it). Once
+        # the human diverges ADR.md, we preserve their edits and only refresh the draft.
         existing = _adr_path(project)
-        seeded = (not existing.exists()) or _adr_is_stub(existing.read_text(encoding="utf-8"))
-        if seeded:
+        sha_file = _locks_dir(project) / "adr_proposal.sha"
+        last = sha_file.read_text(encoding="utf-8").strip() if sha_file.exists() else ""
+        untouched = existing.exists() and _file_sha(existing) == last
+        refresh = (not existing.exists()) or untouched or (
+            existing.exists() and _adr_is_stub(existing.read_text(encoding="utf-8")))
+        if refresh:
             existing.write_text(draft, encoding="utf-8")
-        _log(project, "overview architect", "draft written")
+            _locks_dir(project).mkdir(parents=True, exist_ok=True)
+            sha_file.write_text(_file_sha(existing), encoding="utf-8")  # remember what we placed
+        _log(project, "overview architect", f"draft written; ADR.md {'refreshed' if refresh else 'preserved (hand-edited)'}")
         print("\n— architecture-adversary (advisory — it informs, you decide) —")
         adv = _run_role(
             "architecture-adversary",
@@ -1463,12 +1481,12 @@ def cmd_overview(args: argparse.Namespace) -> int:
         if not findings:
             print("  (no structured findings)")
         print()
-        if seeded:
-            print("Draft written to docs/ADR.md (+ docs/ADR.draft.md). Iterate freely — edit it, or "
-                  "re-run `hssd overview architect` for a fresh proposal in docs/ADR.draft.md.")
+        if refresh:
+            print("docs/ADR.md refreshed with this proposal (+ docs/ADR.draft.md). Edit it freely, or "
+                  "re-run `hssd overview architect` — it keeps refreshing ADR.md until you hand-edit it.")
         else:
-            print("Fresh proposal in docs/ADR.draft.md (your docs/ADR.md was left untouched). Merge "
-                  "what you want into docs/ADR.md.")
+            print("You've hand-edited docs/ADR.md — left it untouched. Fresh proposal is in "
+                  "docs/ADR.draft.md; diff and merge what you want.")
         print("When the architecture is yours, lock it:  hssd architecture approve")
         return 0
 
