@@ -1,6 +1,6 @@
-# Harness Studio — Architecture (a framework on top of Archon)
+# Harness Studio — Architecture (a framework on top of Claude Code)
 
-> How Harness Studio relates to Archon, why it's a layer and not a competitor, and the planned package structure for a future `uv add` / `npm install`.
+> How Harness Studio is built — the `hssd` CLI as the engine, why it's a self-contained framework on top of Claude Code, and the planned package structure for a future `uv add` / `npm install`.
 
 ## The layering
 
@@ -19,28 +19,27 @@
 │  • Definition-of-Done method                            │
 │  • ADR / AI-log / stories templates                     │
 │  • the continuous codebase-health "janitor"            │
+│                                                         │
+│  THE hssd CLI  (the engine — runs the whole loop)       │
+│  • cmd_engage: the 6-phase loop in Python               │
+│  • PM Port: local SQLite spine (.harness/pm.sqlite)     │
+│  • git branches as locks  • scheduled tasks             │
+│  • role→skill scoping (ROLE_SKILLS / per-phase)         │
 └───────────────────────────┬─────────────────────────────┘
-                            │  runs on
+                            │  invokes (claude -p)
                             ▼
 ┌─────────────────────────────────────────────────────────┐
-│  ARCHON  (the engine — workflow execution)              │
-│  • YAML workflow runtime  • git worktree isolation      │
-│  • AI / bash / loop nodes  • multi-platform adapters    │
-└───────────────────────────┬─────────────────────────────┘
-                            │  drives
-                            ▼
-┌─────────────────────────────────────────────────────────┐
-│  CODING AGENT  (Claude Code / Codex / ...)              │
+│  CODING AGENT  (Claude Code)                            │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**The analogy:** Archon is the engine (like Express or FastAPI). Harness Studio is the opinionated framework on top (like Nest on Express, or Rails on Ruby) — it ships the conventions, roles, and guardrails so you don't reinvent a governed process every project.
+**The shape:** the `hssd` CLI is both the engine *and* the opinion. It ships the conventions, roles, and guardrails — and it runs them. The CLI's `cmd_engage` executes the loop directly in Python; you don't bolt it onto a separate workflow runtime. Harness Studio is self-contained: clone it, install the CLI, and the engine is right there.
 
-## Why a layer, not a fork
+## Why self-contained, not bolted onto a runtime
 
-- **Archon owns execution:** deterministic workflow runtime, worktrees, node types, platform adapters. We don't reimplement any of that.
-- **Harness Studio owns opinion:** *which* roles exist, *which* gates are adversarial, *what* "done" means, *how* the ADR and AI log are produced, *how* autonomy graduates. That opinion is the IP.
-- **Graceful degradation:** if a user has no Archon, Harness Studio still works on plain Claude Code (subagents + hooks) or even a generic chat (orchestrator wears the hats). Archon makes it deterministic and repeatable; without it, you get the method, run by hand.
+- **The CLI owns execution:** the 6-phase loop lives in `cli/hssd.py` (`cmd_engage`), the project-management state in a local SQLite spine (`.harness/pm.sqlite`), engagement isolation via git branches (branch-as-lock), and "always-on" cadence via scheduled tasks. No external workflow engine to reimplement or depend on.
+- **Harness Studio owns opinion:** *which* roles exist, *which* gates are adversarial, *what* "done" means, *how* the ADR and AI log are produced, *how* autonomy graduates. That opinion is the IP — and the same CLI enforces it.
+- **One moving part:** the CLI invokes agents via `claude -p` (real agents) or a deterministic `mock` backend (tests). The method and the engine that runs it ship together, so a run is reproducible from the repo alone.
 
 ## What "super-powers" means concretely
 
@@ -63,10 +62,10 @@ Claude Code + the Agent SDK give three distinct mechanisms. They are NOT interch
 
 **Phase mapping:**
 - **P4 verification (adversarial debate, multi-lens review)** → **agent teams** (interactive; teammates challenge each other directly). Not available headless.
-- **Automated / scheduled paths (the janitor, Archon-driven runs)** → **subagents + Archon orchestration** (or the Agent SDK with subagents). No agent teams here.
+- **Automated / scheduled paths (the janitor, unattended CLI runs)** → **subagents driven by the `hssd` CLI** (or the Agent SDK with subagents). No agent teams here.
 - **Within-phase delegation** (e.g., the architect spawning a quick research helper) → **subagents**.
 
-> Consequence: the rich peer-to-peer adversarial collaboration is an *interactive-time* capability; the deterministic, unattended pipeline relies on subagents + Archon. Design each workflow node accordingly.
+> Consequence: the rich peer-to-peer adversarial collaboration is an *interactive-time* capability; the deterministic, unattended pipeline relies on subagents driven by the CLI's `cmd_engage` loop. Design each phase accordingly.
 
 ## Operating modes (`hssd.yaml: type`)
 
@@ -82,15 +81,15 @@ The principle: hssd is *always present* (there's always an `hssd.yaml`), but its
 
 ## Skill routing & context management (scaling to many skills)
 
-There will be **many skills** — tech (`python`, `fastapi`, `typescript`, ...), process (`write-adr`, `stress-test-concurrency`, ...), and domain-specific. You cannot load them all; doing so drowns the model and it gets lost. The framework + Archon solve this by **narrowing the choice *before* the LLM ever sees it** — structure does the heavy lifting; the model only does the last-mile match. Five layers, from coarse to fine:
+There will be **many skills** — tech (`python`, `fastapi`, `typescript`, ...), process (`write-adr`, `stress-test-concurrency`, ...), and domain-specific. You cannot load them all; doing so drowns the model and it gets lost. The framework solves this by **narrowing the choice *before* the LLM ever sees it** — structure does the heavy lifting; the model only does the last-mile match. Five layers, from coarse to fine:
 
-1. **Workflow scope (Archon, deterministic).** A phase/node declares which roles and skills are in play. The LLM never picks from the full catalog — only from the phase's relevant subset.
+1. **Phase scope (the CLI, deterministic).** The CLI's `cmd_engage` loop declares, per phase, which roles and skills are in play. The LLM never picks from the full catalog — only from the phase's relevant subset.
 2. **Role scope.** Each subagent's domain narrows further: `backend-dev` → `python` + `fastapi`; `frontend-dev` → `typescript`. A role only sees its slice.
 3. **Description-as-router (progressive disclosure).** Only skill *descriptions* are always-on (cheap); the full `SKILL.md` body loads **only on match**. 50 skills ≠ 50 bodies in context — it's 50 one-liners and 1–3 active bodies. This is why **description discipline is load-bearing** (see `skills/SKILL-AUTHORING.md`): a vague description breaks routing.
 4. **Context isolation (subagents / teams).** Each worker runs in its own context holding only its relevant skills; the orchestrator never carries everything. Clean contexts by construction.
 5. **Taxonomy.** Skills are grouped (`skills/tech/`, `skills/process/`, `skills/domain/`) so selection is hierarchical, not a flat scan.
 
-**The principle:** the model should face a *small, pre-scoped* set at any moment. Routing reliability = workflow scoping (Archon) + role scoping + good skill descriptions + isolation. Getting lost in context is a design failure of these layers, not an inevitability of having many skills.
+**The principle:** the model should face a *small, pre-scoped* set at any moment. Routing reliability = phase scoping (the CLI) + role scoping (`ROLE_SKILLS`) + good skill descriptions + isolation. Getting lost in context is a design failure of these layers, not an inevitability of having many skills.
 
 ## Execution model: worker vs trigger
 
@@ -99,11 +98,11 @@ Claude Code is a **worker you invoke, not a server that listens.** While a sessi
 That difference is a feature, not a gap — it just means Harness Studio separates two concerns:
 
 - **The worker** (does the work): Claude Code (interactive or `claude -p` headless) / the Agent SDK.
-- **The trigger / availability layer** (decides *when* work starts): you (interactive), or an external mechanism — a scheduler (cron/CI), Archon's adapters (GitHub webhook, Slack, etc.), or an SDK-based service you write.
+- **The trigger / availability layer** (decides *when* work starts): you (interactive), or an external mechanism — a scheduler (cron/CI) that runs a scheduled task, or an SDK-based service you write.
 
 "Always-on" behavior (e.g., the Friday janitor) does **not** come from making Claude Code a daemon; it comes from a trigger that *launches* a Claude Code / SDK run, which does its job and exits. Hermes/OpenClaw bundle the listener into the agent; Harness Studio keeps worker and trigger separate (cleaner, more governable).
 
-**"Continue from current state" = durable artifacts, not session memory.** Don't rely on in-session memory for continuity (agent teams don't even resume in-process). The durable state lives on disk: files, git, the Archon run state, the AI Interaction Log, the shared task list. You re-open, point the agent at those artifacts, and continue. State in the repository, not in the session's head — which is also what makes runs deterministic and resumable.
+**"Continue from current state" = durable artifacts, not session memory.** Don't rely on in-session memory for continuity (agent teams don't even resume in-process). The durable state lives on disk: files, git, the CLI's engagement state in `.harness/` (the pm.sqlite spine + `engagements/<id>/`), the AI Interaction Log, the shared task list. You re-open, point the agent at those artifacts, and continue. State in the repository, not in the session's head — which is also what makes runs deterministic and resumable.
 
 **For now:** Claude Code is our work environment. Runs are session-based and human-started; the trigger/availability layer is a later concern (introduced when we build the janitor and scheduled audits).
 
@@ -143,7 +142,7 @@ harness-studio/                 # the package
     architect.md
     architecture-adversary.md
     ... (all roles)
-  workflows/                    # Archon-ready YAML
+  workflows/                    # reference SOP encoding (illustrative — the CLI runs the loop)
     engagement.yaml             # the 6-phase delivery process
     janitor.yaml                # the scheduled codebase-health audit
   templates/                    # ADR, AI log, stories/AC, Definition of Done
@@ -152,7 +151,7 @@ harness-studio/                 # the package
   docs/                         # the manual (this kit's 00–04, VALUE-RISK-ROI)
 ```
 
-The `harness-sd` CLI (e.g. `harness-sd new`) would copy `agents/` into `.claude/agents/`, `workflows/` into `.archon/workflows/`, and `templates/` into the repo, then write a starter `hssd.yaml` (the project's central config). Today these pieces live as the documents in this folder; the packaging is the future step.
+The `harness-sd` CLI (e.g. `harness-sd new`) would copy `agents/` into `.claude/agents/` and `templates/` into the repo, then write a starter `hssd.yaml` (the project's central config). The `workflows/` YAML stays as a reference encoding of the SOP — the loop itself is the CLI's `cmd_engage`, not a file the host project runs. Today these pieces live as the documents in this folder; the packaging is the future step.
 
 ## Configuration philosophy
 

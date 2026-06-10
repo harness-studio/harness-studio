@@ -10,7 +10,7 @@ A loop needs five building blocks + a memory. We built all of them as we went �
 | Loop piece | In Harness Studio |
 |---|---|
 | **1. Automations** (the heartbeat: scheduled discovery/triage) | the **janitor** (scheduled audit → dedup → files work items); `workflows/janitor.yaml` (planned) + scheduled tasks |
-| **2. Worktrees** (parallel isolation) | Archon worktree-per-engagement; agent teams; the branch-as-lock in `WORK-INTAKE` |
+| **2. Worktrees** (parallel isolation) | the CLI's branch-as-lock / engagement isolation per work item; agent teams; the branch-as-lock in `WORK-INTAKE` |
 | **3. Skills** (project knowledge written down) | `skills/` (SKILL-AUTHORING + python/fastapi/typescript), description-as-router |
 | **4. Plugins/connectors** (touch real tools, via MCP) | the **PM Port sync adapters** (`hssd pm add`), `commands/`, MCPs (later) |
 | **5. Sub-agents** (maker ≠ checker) | the **whole adversarial design** — the author never judges their own "done"; Independent Verifier, Completion Challenger, Security/Test adversaries |

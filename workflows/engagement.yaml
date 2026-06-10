@@ -1,8 +1,9 @@
-# .archon/workflows/engagement.yaml
-# Harness Studio's 6-phase SOP as an Archon workflow (one work item: brief -> delivery).
-# Illustrative: node/field names follow Archon conventions — confirm exact schema at impl time.
+# workflows/engagement.yaml
+# Harness Studio's 6-phase SOP as a reference encoding (one work item: brief -> delivery).
+# Illustrative, NOT executed — the loop itself lives in the hssd CLI (cmd_engage in cli/hssd.py);
+# this file documents the phases, agents, and gates the CLI drives.
 # Mechanism notes: P4 (adversarial debate) suits agent teams (interactive); the rest run as
-# subagents driven by Archon. Lanes: the "fast" lane skips design + most P4 adversaries.
+# subagents driven by the hssd CLI. Lanes: the "fast" lane skips design + most P4 adversaries.
 
 name: hssd-engagement
 description: Spec-driven, adversarial engagement on a single work item.

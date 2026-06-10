@@ -43,4 +43,4 @@ scoped skills (`ROLE_SKILLS`) + the task, then hands it to the AI runtime:
   loop-until-dry + human gates + durable state in `.harness/engagements/<id>/`), `log`.
 - **Next:** `pm add` (sync adapters), `vscode setup`, `update`, and the `janitor` loop.
 - **Engage testing:** `HSSD_AGENT_BACKEND=mock HSSD_MOCK_FILE=<role→output.json> hssd engage <id> --auto`.
-- **Decision (ratifiable):** Python (stdlib) for zero-dep portability and easy testing; could be reconsidered in TS to align with Archon's runtime.
+- **Decision (ratifiable):** Python (stdlib) for zero-dep portability and easy testing.

@@ -22,7 +22,7 @@ Add a thin **execution gate** between an agent's decision and the tool that runs
 2. **Deny-by-default on destructive actions.** A small, named denylist for irreversible operations (e.g. `rm -rf`, `DROP`/`TRUNCATE`, `git push --force`, secret exfiltration) enforced at the same hook. Default deny; an allow is explicit and logged.
 3. **A real budget/step ceiling.** A counter the runner reads-and-decrements per step; over the ceiling, the next action is **denied** (not a warning). On the `claude` backend, drive it from real token/cost usage where the backend exposes it; otherwise fall back to a step count.
 4. **Named-reason denials.** A denial returns the rule that fired (reuse the existing `{verdict, reason}` shape), and the reason is handed back to the model — exactly like the adversary verdicts.
-5. **Reversible isolation for write-capable roles.** Run write/`bash` roles in a git worktree (Archon's `isolation: worktree`), so a bad action is reverted, not lived with.
+5. **Reversible isolation for write-capable roles.** Run write/`bash` roles in a git worktree, so a bad action is reverted, not lived with.
 6. **Audit every decision** to the existing session log (`.harness/logs/`). The surprise audit already samples this log.
 7. **Lightweight policy, no heavy dependency in v1.** Policy lives as a small declarative block in `hssd.yaml` (allowlists, ceilings, the destructive denylist) — *not* a Cedar/OPA engine yet. Defaults favor safety; the Lead dials rigor down for low-risk lanes, never up by accident.
 

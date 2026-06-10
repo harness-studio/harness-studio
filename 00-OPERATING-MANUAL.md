@@ -59,7 +59,7 @@ Protocols in `03-DELIVERABLE-PROTOCOLS.md`.
 | `02-PROCESS-GATES-DOD.md` | The 6 phases, gates, and deriving the Definition of Done. |
 | `03-DELIVERABLE-PROTOCOLS.md` | Producing the AI log, the ADR, and the README. |
 | `04-KICKOFF.md` | Kickoff prompt, time budget, and an example engagement brief. |
-| `ARCHITECTURE.md` | How Harness Studio layers on Archon + package vision. |
+| `ARCHITECTURE.md` | Architecture (the `hssd` CLI engine) + package vision. |
 | `VALUE-RISK-ROI.md` | Why it pays off. |
 
 > Deeper background (optional, not needed to execute) lives in the broader project docs. The kit above is sufficient on its own.

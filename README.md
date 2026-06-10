@@ -10,7 +10,7 @@
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![status](https://img.shields.io/badge/status-research--preview-orange)
 
-Harness Studio is a **framework on top of [Archon](https://github.com/coleam00/Archon)** and Claude Code. Archon is the engine that runs AI-coding workflows; Harness Studio is the opinionated, batteries-included layer that gives a project a *governed engineering team* — specialists that build, adversaries that try to break the work, and a CLI (`hssd`) that runs the whole loop.
+Harness Studio is a **framework on top of Claude Code**. The `hssd` CLI is the engine — it holds the project state and drives the AI-coding workflow end-to-end — and the framework is the opinionated, batteries-included layer that gives a project a *governed engineering team*: specialists that build, adversaries that try to break the work, and gates that hold the quality line.
 
 It's an **AI-first development OS**: AI does the building, but everything is **well-defined and human-in-the-loop**.
 
@@ -132,7 +132,7 @@ harness-studio/
   README.md                 # you are here
   GLOSSARY.md               # every term & acronym, defined (tenet 10)
   PHILOSOPHY.md             # the soul — why it's opinionated
-  ARCHITECTURE.md           # layering on Archon, agent mechanisms, skill routing, delivery
+  ARCHITECTURE.md           # the CLI engine, agent mechanisms, skill routing, delivery
   LOOPS.md                  # loop engineering — the engagement & janitor loops
   STANDARDS.md              # engineering standards (TDD, spec-driven, security, model tiering)
   WORK-INTAKE-AND-CLAIMING.md  # PM Port, claiming, git/branch model
@@ -142,7 +142,7 @@ harness-studio/
   agents/                   # the team — 13 subagents (specialists + adversaries)
   skills/                   # python, fastapi, typescript + SKILL-AUTHORING
   templates/                # ADR, AI log, stories/AC, Definition of Done (doc templates)
-  workflows/                # engagement.yaml, janitor.yaml (Archon-ready)
+  workflows/                # engagement.yaml, janitor.yaml (reference SOP encoding — the CLI runs the loop)
   examples/                 # illustrative example engagements (NOT the framework — outputs of it)
   cli/hssd.py               # the CLI
 ```
