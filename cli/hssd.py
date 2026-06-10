@@ -1144,6 +1144,7 @@ _ARCH_SKILLS = [*_ENG_SKILLS, "push-over-pull"]
 ROLE_SKILLS = {
     "architect": ["python", "fastapi", "typescript", *_ARCH_SKILLS],
     "architecture-adversary": _ARCH_SKILLS,
+    "test-author": ["python", "fastapi", *_ENG_SKILLS],  # RED step: tests encode the skills' expectations
     "backend-dev": ["python", "fastapi", *_ENG_SKILLS, "push-over-pull"],
     "frontend-dev": ["typescript", "datetime-utc", "api-conventions", "push-over-pull"],
     "test-adversary": _ENG_SKILLS,
@@ -1877,27 +1878,67 @@ def cmd_engage(args: argparse.Namespace) -> int:
             return 1
         print("  ✓ rubric satisfied")
     else:
-        # Code deliverable: the goal loop — iterate until the adversarial checkers are dry.
+        # Code deliverable. Mandatory TDD: RED (tests written from the locked AC must FAIL first),
+        # then GREEN (implement until they pass), then loop-until-dry on the adversaries. The CLI
+        # RUNS the tests itself and captures the output — TDD is a verified guarantee, not a claim.
+        test_cmd = (getattr(args, "test_cmd", None) or "uv run pytest").split()
+
+        def _run_tests(tag: str) -> int:
+            """Run the project's test command; persist output as red/green evidence. Returns the
+            exit code (0 = pass, >0 = fail, -1 = couldn't run)."""
+            try:
+                res = subprocess.run(test_cmd, cwd=project, capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=900)
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                (st / f"tests-{tag}.log").write_text(f"test run failed: {e}\n", encoding="utf-8")
+                return -1
+            (st / f"tests-{tag}.log").write_text((res.stdout or "") + (res.stderr or ""),
+                                                 encoding="utf-8")
+            return res.returncode
+
+        # P3a — RED: author the tests from the locked AC, before any implementation; they MUST fail.
+        print("P3a Red — author tests from the locked AC (must fail first)")
+        run("test-author")
+        rc = _run_tests("red")
+        if rc == -1:
+            print(f"BLOCK: couldn't run the test command ({' '.join(test_cmd)}). Pass --test-cmd or "
+                  f"make it runnable in the project. See .harness/engagements/{args.id}/tests-red.log",
+                  file=sys.stderr)
+            return 1
+        if rc == 0:
+            print("  ⏸ tests PASS with no implementation — vacuous (the RED step of TDD failed).")
+            print(f"BLOCK: tests must fail before code exists. Strengthen them, then re-run "
+                  f"`hssd engage {args.id}`. See .harness/engagements/{args.id}/tests-red.log",
+                  file=sys.stderr)
+            return 1
+        print("  ✓ red: the AC tests fail as expected (no implementation yet)")
+
         checkers = [
             ("independent-verifier", "Independent Verifier"),
             ("completion-challenger", "Completion Challenger"),
             ("test-adversary", "Test Adversary"),
             ("regression-hunter", "Regression Hunter"),  # always on — integrity is non-negotiable
         ]
-        # Security is mandatory for API/auth surfaces (STANDARDS §2); --no-security opts out for
-        # non-API work (the documented escape hatch).
-        if not args.no_security:
+        if not args.no_security:  # mandatory for API/auth surfaces (STANDARDS §2); --no-security opts out
             checkers.insert(0, ("security-adversary", "Security/Attack Adversary"))
+
+        # P3b — GREEN: implement until the AC tests pass, then P4 loop-until-dry on the adversaries.
         dry = False
         for attempt in range(1, args.max_iter + 1):
-            print(f"P3 Build (attempt {attempt})"); run("backend-dev"); run("frontend-dev")
+            print(f"P3b Build (attempt {attempt})"); run("backend-dev"); run("frontend-dev")
+            green = _run_tests("green") == 0
+            print(f"  {'✓ green: AC tests pass' if green else '⏸ AC tests still failing'} "
+                  f"(.harness/engagements/{args.id}/tests-green.log)")
+            if not green:
+                print("  ↻ not green → back to P3b"); continue
             print("P4 Verification")
             blockers = [label for role, label in checkers if not gate(role, label)]
             if not blockers:
-                print("  ✓ loop-until-dry: dry (all checkers PASS)"); dry = True; break
-            print(f"  ↻ blockers {blockers} → back to P3")
+                print("  ✓ loop-until-dry: dry (green + all checkers PASS)"); dry = True; break
+            print(f"  ↻ blockers {blockers} → back to P3b")
         if not dry:
-            print(f"BLOCK: still failing after {args.max_iter} attempts.", file=sys.stderr); return 1
+            print(f"BLOCK: not green-and-dry after {args.max_iter} attempts.", file=sys.stderr)
+            return 1
 
     print("P5 Integration")
     if not human("MERGE"):
@@ -1991,6 +2032,8 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--accept-recommended", action="store_true", dest="accept_recommended",
                     help="on a blocked intake/AC/architecture gate, auto-take the adversary's "
                          "recommended resolution and retry (graduated autonomy; loop-forward)")
+    pe.add_argument("--test-cmd", default=None, dest="test_cmd",
+                    help="command the TDD gate runs for red/green evidence (default: 'uv run pytest')")
     pe.add_argument("--max-calls", type=int, default=40, dest="max_calls",
                     help="hard ceiling on total AI calls for the run — never loop forever (0 = off)")
     pe.add_argument("--budget", type=float, default=0.0,
