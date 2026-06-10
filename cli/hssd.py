@@ -1128,11 +1128,14 @@ def _agent_tools(role: str) -> str:
 # IMMEDIATE, missing busy_timeout, missing indexes, naive datetimes, ad-hoc API shapes), now a
 # standing guard the process applies on every engagement.
 _ENG_SKILLS = ["sqlite-concurrency", "sql-indexing", "datetime-utc", "api-conventions", "resilience"]
+# Architecture/transport preferences sit one level up from the correctness guards: push-over-pull is
+# a design choice the architect proposes and the adversary challenges (and the devs implement).
+_ARCH_SKILLS = [*_ENG_SKILLS, "push-over-pull"]
 ROLE_SKILLS = {
-    "architect": ["python", "fastapi", "typescript", *_ENG_SKILLS],
-    "architecture-adversary": _ENG_SKILLS,
-    "backend-dev": ["python", "fastapi", *_ENG_SKILLS],
-    "frontend-dev": ["typescript", "datetime-utc", "api-conventions"],
+    "architect": ["python", "fastapi", "typescript", *_ARCH_SKILLS],
+    "architecture-adversary": _ARCH_SKILLS,
+    "backend-dev": ["python", "fastapi", *_ENG_SKILLS, "push-over-pull"],
+    "frontend-dev": ["typescript", "datetime-utc", "api-conventions", "push-over-pull"],
     "test-adversary": _ENG_SKILLS,
 }
 
