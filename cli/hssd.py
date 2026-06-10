@@ -704,13 +704,21 @@ def _file_sha(path: Path) -> str:
 
 
 def _adr_is_stub(body: str) -> bool:
-    """An ADR that is still just placeholders/headings — not yet a real decision record."""
-    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-    content = [ln for ln in lines if not ln.startswith("#")]
-    if len(content) < 3:
-        return True
-    placeholder = re.compile(r"^(<.*>|_.*_|—|-+|\*+|<!--.*-->)$")
-    return all(placeholder.match(ln) for ln in content)
+    """True while docs/ADR.md is still the scaffold template (headings + blockquote guidance +
+    <angle-bracket placeholders>) rather than a filled decision record. `approve` must reject it.
+    Counts SUBSTANTIVE content lines (real prose/table cells), ignoring headings, '>' guidance and
+    placeholder lines — the init template scores ~0, a real ADR scores well above the floor."""
+    real = 0
+    for raw in body.splitlines():
+        ln = raw.strip()
+        if not ln or ln.startswith("#") or ln.startswith(">"):
+            continue                          # heading or blockquote guidance
+        if "<" in ln and ">" in ln:
+            continue                          # an <angle-bracket placeholder> line/cell
+        core = re.sub(r"[|>\-*_`\s]", "", ln)  # strip markdown furniture (tables, bullets, emphasis)
+        if len(core) >= 15 and re.search(r"[A-Za-z]", core):
+            real += 1
+    return real < 6
 
 
 # The PROJECT state machine is NON-TERMINAL: after the foundation it enters 'operational' and stays
@@ -1416,9 +1424,13 @@ def cmd_overview(args: argparse.Namespace) -> int:
         docs = project / "docs"
         docs.mkdir(parents=True, exist_ok=True)
         (docs / "ADR.draft.md").write_text(draft, encoding="utf-8")
-        seeded = not _adr_path(project).exists()
+        # Seed docs/ADR.md with the proposal when it's absent OR still the init template stub (a stub
+        # is not human work to protect). Only a real, curated ADR.md is preserved (draft-only) so the
+        # engineer's edits are never clobbered.
+        existing = _adr_path(project)
+        seeded = (not existing.exists()) or _adr_is_stub(existing.read_text(encoding="utf-8"))
         if seeded:
-            _adr_path(project).write_text(draft, encoding="utf-8")
+            existing.write_text(draft, encoding="utf-8")
         _log(project, "overview architect", "draft written")
         print("\n— architecture-adversary (advisory — it informs, you decide) —")
         adv = _run_role(
@@ -1696,11 +1708,19 @@ def cmd_engage(args: argparse.Namespace) -> int:
     base_ctx = (f"Work item {args.id}: {title}\n(Project overview in .harness/overview.md)\n\n"
                 f"{accept}{adr_ctx}")
 
+    # The upstream artifact (analyst → skeptic, story-writer → AC adversary, architect → arch
+    # adversary) is handed to the reviewer IN CONTEXT, so an adversary never has to hunt the
+    # filesystem for it (which made the AC adversary thrash through dozens of phantom reads).
+    _upstream = {"label": "", "text": ""}
+
     def current_ctx() -> str:  # re-read assumptions each call so recorded answers take effect
         c = base_ctx
         if assumptions_file.exists():
             c += ("\n\n## Resolved assumptions (decided by the Engagement Lead — treat as settled; "
                   "do NOT re-raise these)\n" + assumptions_file.read_text(encoding="utf-8"))
+        if _upstream["text"]:
+            c += (f"\n\n## {_upstream['label']} — the artifact under review. Read it HERE; do NOT "
+                  f"search the filesystem for it.\n{_upstream['text']}")
         return c
 
     def run(role: str, expect_json: bool = False) -> str:
@@ -1795,13 +1815,16 @@ def cmd_engage(args: argparse.Namespace) -> int:
         print("Standing governance deliverable — skipping adversarial intake (P0-P2 + Spec Lock).")
         print("  the AI Interaction Log is captured continuously; produce it with `hssd ailog`.")
     else:
-        print("P0 Intake"); run("product-analyst")
+        print("P0 Intake")
+        _upstream.update(label="Problem statement (product-analyst)", text=run("product-analyst"))
         if not passing_gate("definition-skeptic", "Definition Skeptic"):
             return 2
-        print("P1 Stories & AC"); run("story-writer")
+        print("P1 Stories & AC")
+        _upstream.update(label="Stories & acceptance criteria (story-writer)", text=run("story-writer"))
         if not passing_gate("ac-adversary", "AC Adversary"):
             return 2
-        print("P2 Architecture"); run("architect")
+        print("P2 Architecture")
+        _upstream.update(label="Story architecture (architect)", text=run("architect"))
         if not passing_gate("architecture-adversary", "Architecture Adversary"):
             return 2
         if not human("SPEC LOCK (no code before this)"):
