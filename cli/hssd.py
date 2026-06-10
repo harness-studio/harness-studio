@@ -104,6 +104,30 @@ HARNESS_GITIGNORE = (
 )
 
 
+# Scoped permissions so the headless builder/test roles run UNATTENDED (no "allow this write?" prompt
+# that stalled the P3 build) — without a global bypass and without breaking login auth (unlike --bare).
+# Claude Code reads `.claude/settings.local.json` from the project: edits/writes are auto-approved,
+# only a whitelist of build commands runs without a prompt, and dangerous/secret/recursive ops are
+# denied outright. Read-only roles (analysts/adversaries) are further constrained by --allowedTools.
+CLAUDE_SETTINGS_LOCAL = json.dumps({
+    "permissions": {
+        "allow": [
+            "Read", "Glob", "Grep", "Edit", "Write",
+            "Bash(uv *)", "Bash(uvx *)", "Bash(python *)", "Bash(python3 *)",
+            "Bash(pytest *)", "Bash(ruff *)", "Bash(npm *)", "Bash(npx *)", "Bash(node *)",
+            "Bash(git add *)", "Bash(git commit *)", "Bash(git status*)", "Bash(git diff*)",
+            "Bash(ls *)", "Bash(cat *)", "Bash(mkdir *)", "Bash(mv *)", "Bash(cp *)", "Bash(echo *)",
+        ],
+        "deny": [
+            "Bash(rm -rf *)", "Bash(sudo *)", "Bash(hssd*)", "Bash(harness-sd*)",
+            "Bash(git push*)", "Bash(git reset --hard*)",
+            "Read(.env)", "Read(.env.*)", "Read(**/.env)",
+            "Write(.env)", "Write(.env.*)", "Write(.git/**)",
+        ],
+    }
+}, indent=2)
+
+
 def _mirror_if_absent(src: Path, dst: Path) -> tuple[int, int]:
     """Copy every file under src into dst, create-if-absent (never overwrite). Returns (created, skipped)."""
     created = skipped = 0
@@ -142,6 +166,11 @@ def _wire_claude(dest: Path) -> tuple[int, int]:
         c, s = _mirror_if_absent(commands_root, dest / ".claude" / "commands")
         created += c
         skipped += s
+    settings = dest / ".claude" / "settings.local.json"  # unattended-but-scoped tool permissions
+    if not settings.exists():
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(CLAUDE_SETTINGS_LOCAL, encoding="utf-8")
+        created += 1
     return created, skipped
 
 
