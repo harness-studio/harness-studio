@@ -1121,10 +1121,19 @@ def _agent_tools(role: str) -> str:
 
 
 # Role -> blessed skills it loads (the CLI does the skill routing / scoping).
+# Engineering skills the harness applies as find-and-propose checklists: an adversary loads them to
+# CATCH violations (find the error + propose the fix), the architect/builder load them to be correct
+# by construction. Encoding these recurring lessons is the "fix the harness, not the code" loop —
+# each was a defect caught by hand once (dual-writer race, INSERT OR REPLACE, aiosqlite/BEGIN
+# IMMEDIATE, missing busy_timeout, missing indexes, naive datetimes, ad-hoc API shapes), now a
+# standing guard the process applies on every engagement.
+_ENG_SKILLS = ["sqlite-concurrency", "sql-indexing", "datetime-utc", "api-conventions", "resilience"]
 ROLE_SKILLS = {
-    "backend-dev": ["python", "fastapi"],
-    "frontend-dev": ["typescript"],
-    "architect": ["python", "fastapi", "typescript"],
+    "architect": ["python", "fastapi", "typescript", *_ENG_SKILLS],
+    "architecture-adversary": _ENG_SKILLS,
+    "backend-dev": ["python", "fastapi", *_ENG_SKILLS],
+    "frontend-dev": ["typescript", "datetime-utc", "api-conventions"],
+    "test-adversary": _ENG_SKILLS,
 }
 
 
