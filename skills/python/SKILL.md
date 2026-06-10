@@ -8,6 +8,23 @@ description: Load for any Python work — project setup, typing, async, testing,
 
 Modern, forward-looking Python: **uv** for env/deps, **ruff** for lint+format, **pytest** with **TDD**, **pydantic** for data models, **asyncio** for IO-bound work, strict and modern typing. One paradigm per module (object-oriented *or* functional) — never mixed.
 
+## uv is mandatory — run EVERYTHING through `uv` (non-negotiable)
+
+Bare `python` / `pip` / `pytest` use whatever interpreter happens to be on `PATH` — almost never the project's `.venv` — so imports fail, the wrong dependencies load, and tests error out for environment reasons that have nothing to do with the code. **The project's environment is the one `uv` manages from `pyproject.toml` + `uv.lock`.** Every Python command goes through `uv`:
+
+| Instead of (WRONG) | Always run (BLESSED) |
+|---|---|
+| `python script.py` / `python -m x` | `uv run python script.py` / `uv run python -m x` |
+| `pytest` / `python -m pytest` | `uv run pytest` |
+| `pip install X` / `pip install -r req.txt` | `uv add X` (runtime) · `uv add --dev X` (dev/test) |
+| `ruff check` / `mypy` | `uv run ruff check` / `uv run mypy` |
+| activating a venv then running | nothing to activate — `uv run` resolves the env |
+| (first run / fresh clone) | `uv sync` to materialize the env from the lockfile |
+
+**Detect → propose:** any command that invokes `python`, `pip`, `pytest`, `ruff`, `mypy`, or a tool entry point WITHOUT a leading `uv run`/`uv add`/`uv sync` is a violation → rewrite it with the `uv` prefix above. A test failure whose traceback is `ModuleNotFoundError`, `command not found`, or a wrong-version import is almost always "ran outside `uv`" — re-run it as `uv run pytest` before debugging the code.
+
+**Rule of thumb:** if you typed `python`, `pip`, or `pytest` and the next word isn't preceded by `uv`, stop and add it. The only sanctioned exception is a documented constrained environment, recorded in the engagement's ADR — never a silent default.
+
 ## Conventions
 
 1. **Environment & deps: `uv` only.** `uv add` / `uv run`; `pyproject.toml` is the source of truth. No bare `pip`, no `requirements.txt` as the primary.
