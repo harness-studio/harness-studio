@@ -1,0 +1,43 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0 -- C:\Workspace\harness-studio\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Workspace\harness-studio
+configfile: pyproject.toml
+plugins: anyio-4.13.0, asyncio-1.4.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 32 items
+
+tests/test_skill.py::test_ac1_list_exits0_shows_blessed_catalog PASSED   [  3%]
+tests/test_skill.py::test_ac2_list_shows_user_entries PASSED             [  6%]
+tests/test_skill.py::test_ac3_list_handles_corrupt_skills_json PASSED    [  9%]
+tests/test_skill.py::test_ac4_add_writes_skills_json PASSED              [ 12%]
+tests/test_skill.py::test_ac5_add_missing_name_blocks PASSED             [ 15%]
+tests/test_skill.py::test_ac5_add_missing_from_blocks PASSED             [ 18%]
+tests/test_skill.py::test_ac6_add_blessed_url_prints_already_known PASSED [ 21%]
+tests/test_skill.py::test_ac7_add_same_url_twice_deduplicates PASSED     [ 25%]
+tests/test_skill.py::test_ac8_rm_after_add_round_trips_to_empty PASSED   [ 28%]
+tests/test_skill.py::test_ac9_rm_blessed_name_prints_not_in_registry PASSED [ 31%]
+tests/test_skill.py::test_ac10_rm_no_args_blocks PASSED                  [ 34%]
+tests/test_skill.py::test_ac11_user_entry_same_name_as_blessed_is_removable PASSED [ 37%]
+tests/test_skill.py::test_ac12_import_creates_skill_md PASSED            [ 40%]
+tests/test_skill.py::test_ac13_import_strips_git_dir PASSED              [ 43%]
+tests/test_skill.py::test_ac14_name_stripped_from_repo_dir PASSED        [ 46%]
+tests/test_skill.py::test_ac14_name_override_with_name_arg PASSED        [ 50%]
+tests/test_skill.py::test_ac14_plain_name_no_prefix_stripping PASSED     [ 53%]
+tests/test_skill.py::test_ac15_import_idempotent PASSED                  [ 56%]
+tests/test_skill.py::test_ac16_import_keeps_existing_skill_md PASSED     [ 59%]
+tests/test_skill.py::test_ac17_reimport_after_upstream_change_keeps_old PASSED [ 62%]
+tests/test_skill.py::test_ac18_import_missing_from_blocks PASSED         [ 65%]
+tests/test_skill.py::test_ac19_import_nested_skill_md_blocks PASSED      [ 68%]
+tests/test_skill.py::test_ac19_import_no_skill_md_blocks PASSED          [ 71%]
+tests/test_skill.py::test_ac20_into_directs_install PASSED               [ 75%]
+tests/test_skill.py::test_ac21_import_collides_with_blessed_python_blocks PASSED [ 78%]
+tests/test_skill.py::test_ac21_import_collides_with_blessed_harness_studio_blocks PASSED [ 81%]
+tests/test_skill.py::test_ac22_import_empty_name_after_prefix_strip_blocks PASSED [ 84%]
+tests/test_skill.py::test_ac23_sync_preserves_user_imported_skill PASSED [ 87%]
+tests/test_skill.py::test_ac24_real_home_skills_json_untouched PASSED    [ 90%]
+tests/test_skill.py::test_add_tech_omitted_yields_empty_list PASSED      [ 93%]
+tests/test_skill.py::test_rm_by_url_removes_entry PASSED                 [ 96%]
+tests/test_skill.py::test_rm_by_url_does_not_match_none_url_entries PASSED [100%]
+
+============================= 32 passed in 4.07s ==============================

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""hssd — Harness Studio CLI (skeleton).
+"""hssd — Harness Studio CLI: the engine that drives the governed, adversarial workflow.
 
-Long name: harness-sd. Short alias: hssd. Targets Python 3.12 in production;
-uses only the stdlib so the skeleton runs anywhere.
+Long name: harness-sd. Short alias: hssd. Targets Python 3.12; uses only the stdlib so it
+runs anywhere. The AI backend is pluggable: HSSD_AGENT_BACKEND=claude (default, real agents
+via Claude Code) or mock (deterministic, for tests).
 
-Implemented (skeleton):
-  hssd new <name> [--template=<t>] [--from=<git-url>]
-  hssd template list | import --from=<git-url>
-  hssd log [--verbose]
+Surface: new · init · sync · status · template (list|import|add|rm) · skill (list|import|add|rm) ·
+overview (add|architect|analyze|split) · architecture (approve|status|reopen) · sprint
+(plan|status|review|close) · work (add|list|show|claim|done) · engage · janitor · reset ·
+update · log · stats · ailog. See `hssd <cmd> --help` and CLI.md.
 """
 
 from __future__ import annotations
@@ -41,27 +42,89 @@ TEMPLATE_CATALOG = [
      "tech": ["typescript", "react", "vite"]},
 ]
 
+# Blessed skill catalog. Skills are framework-shipped and live under skills/ in the package.
+# This catalog powers `skill list` + dedup in `skill add`.
+SKILL_CATALOG = [
+    {"name": "api-conventions",
+     "url": "https://github.com/harness-studio/hssd-skill-api-conventions",
+     "tech": []},
+    {"name": "datetime-utc",
+     "url": "https://github.com/harness-studio/hssd-skill-datetime-utc",
+     "tech": []},
+    {"name": "fastapi",
+     "url": "https://github.com/harness-studio/hssd-skill-fastapi",
+     "tech": ["python", "fastapi"]},
+    {"name": "harness-studio",
+     "url": "https://github.com/harness-studio/hssd-skill-harness-studio",
+     "tech": []},
+    {"name": "push-over-pull",
+     "url": "https://github.com/harness-studio/hssd-skill-push-over-pull",
+     "tech": []},
+    {"name": "python",
+     "url": "https://github.com/harness-studio/hssd-skill-python",
+     "tech": ["python"]},
+    {"name": "resilience",
+     "url": "https://github.com/harness-studio/hssd-skill-resilience",
+     "tech": []},
+    {"name": "sql-indexing",
+     "url": "https://github.com/harness-studio/hssd-skill-sql-indexing",
+     "tech": ["sql"]},
+    {"name": "sqlite-concurrency",
+     "url": "https://github.com/harness-studio/hssd-skill-sqlite-concurrency",
+     "tech": ["sqlite"]},
+    {"name": "typescript",
+     "url": "https://github.com/harness-studio/hssd-skill-typescript",
+     "tech": ["typescript"]},
+]
+
 
 def _user_catalog_path() -> Path:
     """User-registered templates (the ones *you* trust), shared across all your projects."""
     return Path.home() / ".hssd" / "templates.json"
 
 
-def _load_user_catalog() -> list[dict]:
-    p = _user_catalog_path()
-    if not p.exists():
+def _load_catalog_file(path: Path) -> list[dict]:
+    """Generic helper: load a JSON catalog file, returning a list of dicts (or [] on error)."""
+    if not path.exists():
         return []
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def _load_user_catalog() -> list[dict]:
+    return _load_catalog_file(_user_catalog_path())
 
 
 def _full_catalog() -> list[dict]:
     """Blessed templates + the user's own registered ones. Any git URL still works via --from."""
     return ([dict(t, source="blessed") for t in TEMPLATE_CATALOG]
             + [dict(t, source="user") for t in _load_user_catalog()])
+
+
+# ── Skill catalog helpers ──────────────────────────────────────────────────────────────────
+
+def _skill_user_catalog_path() -> Path:
+    return Path.home() / ".hssd" / "skills.json"
+
+
+def _load_skill_user_catalog() -> list[dict]:
+    return _load_catalog_file(_skill_user_catalog_path())
+
+
+def _full_skill_catalog() -> list[dict]:
+    return ([dict(s, source="blessed") for s in SKILL_CATALOG]
+            + [dict(s, source="user") for s in _load_skill_user_catalog()])
+
+
+def _blessed_skill_names() -> set[str]:
+    skills_root = PKG_ROOT / "skills"
+    if not skills_root.exists():
+        return {s["name"] for s in SKILL_CATALOG}
+    return {d.name for d in skills_root.iterdir() if d.is_dir()}
+
 
 # Template repos can't ship dotfiles, so they're stored under dotfiles/ and renamed here.
 DOTFILE_MAP = {
@@ -398,16 +461,17 @@ def _mirror_force(src: Path, dst: Path) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    """Re-sync .claude/ (agents, skills, commands) from the framework — OVERWRITES, so a project
-    picks up framework updates (init is create-if-absent and won't refresh them)."""
+    """Re-sync .claude/ (agents, skills, commands) from the framework — OVERWRITES framework-shipped
+    skills only, so user-imported skills are preserved across syncs."""
     dest = Path(".").resolve()
     n = 0
     if AGENTS.exists():
         n += _mirror_force(AGENTS, dest / ".claude" / "agents")
     skills_root = PKG_ROOT / "skills"
     if skills_root.exists():
+        blessed = _blessed_skill_names()
         for d in sorted(skills_root.iterdir()):
-            if d.is_dir():
+            if d.is_dir() and d.name in blessed:  # only overwrite framework-shipped names
                 n += _mirror_force(d, dest / ".claude" / "skills" / d.name)
     commands_root = PKG_ROOT / "commands"
     if commands_root.exists():
@@ -525,7 +589,7 @@ def cmd_template(args: argparse.Namespace) -> int:
         for line in hy.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("conflict_policy:"):
                 policy = line.split(":", 1)[1].strip()
-    _log(project, "template import", f"src={args.from_git or args.template} conflicts={len(conflicts)}")
+    _log(project, "template import", f"src={args.from_git} conflicts={len(conflicts)}")
     if conflicts:
         print(f"composed with {len(conflicts)} conflict(s) [policy={policy}]:")
         for c in conflicts:
@@ -534,6 +598,116 @@ def cmd_template(args: argparse.Namespace) -> int:
         print("composed cleanly (additive merge, no conflicts)")
     shutil.rmtree(tmp, ignore_errors=True)
     return 0
+
+
+def _rmtree_git(path: Path) -> None:
+    """Remove a .git directory robustly on Windows (clears read-only bits before deletion)."""
+    if not path.exists():
+        return
+    if path.is_file():
+        path.unlink(missing_ok=True)
+        return
+
+    def _on_error(func, path_str, exc_info):
+        """Clear read-only flag and retry on Windows PermissionError."""
+        try:
+            import stat
+            os.chmod(path_str, stat.S_IWRITE)
+            func(path_str)
+        except Exception:
+            pass
+
+    shutil.rmtree(str(path), onerror=_on_error)
+
+
+def cmd_skill(args: argparse.Namespace) -> int:
+    """list / import / register skills (blessed catalog + your own; any git URL)."""
+    if args.action == "list":
+        for s in _full_skill_catalog():
+            tech = ", ".join(s.get("tech", []))
+            print(f"{s.get('source', '?'):<8} {s['name']:<32} {tech:<26} {s.get('url', '')}")
+        return 0
+
+    if args.action == "add":
+        if not (args.name and args.from_git):
+            print("BLOCK: add needs --name and --from=<git-url>", file=sys.stderr)
+            return 1
+        known = {e.get("url"): e.get("source", "user") for e in _full_skill_catalog()}
+        if args.from_git in known:
+            print(f"already known ({known[args.from_git]} catalog) — no need to re-register: {args.from_git}")
+            return 0
+        cat = _load_skill_user_catalog()
+        tech = [t.strip() for t in (args.tech or "").split(",") if t.strip()]
+        cat.append({"name": args.name, "url": args.from_git, "tech": tech})
+        p = _skill_user_catalog_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(cat, indent=2), encoding="utf-8")
+        print(f"OK: registered '{args.name}' -> {args.from_git}")
+        return 0
+
+    if args.action == "rm":
+        if not (args.name or args.from_git):
+            print("BLOCK: rm needs --name or --from=<git-url>", file=sys.stderr)
+            return 1
+        cat = _load_skill_user_catalog()
+        kept = [e for e in cat
+                if not (e.get("name") == args.name
+                        or (args.from_git and e.get("url") == args.from_git))]
+        if len(kept) == len(cat):
+            print(f"not in your registry: {args.name or args.from_git}")
+            return 0
+        _skill_user_catalog_path().write_text(json.dumps(kept, indent=2), encoding="utf-8")
+        print(f"OK: removed {len(cat) - len(kept)} entry(ies) from your skill registry")
+        return 0
+
+    # import: clone the skill repo and install it into the project (create-if-absent).
+    if args.action == "import":
+        if not args.from_git:
+            print("BLOCK: import needs --from=<git-url>", file=sys.stderr)
+            return 1
+        project = Path(args.into or ".").resolve()
+        if args.into and not project.exists():
+            print(f"BLOCK: --into directory does not exist: {project}", file=sys.stderr)
+            return 1
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            incoming_root = tmp / "incoming"
+            subprocess.run(["git", "clone", "--depth", "1", args.from_git, str(incoming_root)],
+                           check=True, capture_output=True)
+            # Remove .git — handles read-only pack files on Windows
+            _rmtree_git(incoming_root / ".git")
+
+            # Resolve name
+            repo_dir_name = Path(args.from_git.rstrip("/")).name
+            # strip .git suffix if present
+            if repo_dir_name.endswith(".git"):
+                repo_dir_name = repo_dir_name[:-4]
+            name = args.name if args.name else _slug(repo_dir_name.removeprefix("hssd-skill-"))
+
+            if not name:
+                print("BLOCK: resolved skill name is empty (repo name after prefix strip is blank)",
+                      file=sys.stderr)
+                return 1
+            if name in _blessed_skill_names():
+                print(f"BLOCK: '{name}' is a framework-shipped skill name — cannot import over it "
+                      f"(it would be overwritten on next 'hssd sync')", file=sys.stderr)
+                return 1
+            if not (incoming_root / "SKILL.md").exists():
+                print("BLOCK: repo has no SKILL.md at its root (nested SKILL.md not accepted)",
+                      file=sys.stderr)
+                return 1
+
+            dest = project / ".claude" / "skills" / name
+            created, kept = _mirror_if_absent(incoming_root, dest)
+            # Ensure no .git artifacts landed in the destination
+            _rmtree_git(dest / ".git")
+            print(f"OK: skill '{name}' installed (created {created}, skipped {kept})")
+            return 0
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    print(f"BLOCK: unknown skill action: {args.action}", file=sys.stderr)
+    return 1
 
 
 def cmd_log(args: argparse.Namespace) -> int:
@@ -1119,7 +1293,7 @@ def cmd_work(args: argparse.Namespace) -> int:
         print(f"BLOCK: {args.id} already claimed (status={row[1]})", file=sys.stderr)
         return 1
     _log(project, "work claim", f"{args.id} -> {branch}")
-    subprocess.run(["git", "checkout", "-q", "-b", branch], check=False)
+    _git_switch(branch)  # idempotent: re-claim after a reset reuses the existing branch (no silent fail)
     print(f"OK: claimed {args.id} · branch {branch}")
     return 0
 
@@ -2019,7 +2193,9 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
 
-    p = argparse.ArgumentParser(prog="hssd", description="Harness Studio CLI (skeleton)")
+    p = argparse.ArgumentParser(
+        prog="hssd",
+        description="Harness Studio — the engine for the governed, adversarial AI-coding workflow")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("new", help="create a project (empty governed, or from a template repo via --from)")
@@ -2041,6 +2217,14 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--tech", default=None, help="comma-separated tech tags when registering (add)")
     pt.add_argument("--into", default=None, help="target project dir for import (default: cwd)")
     pt.set_defaults(func=cmd_template)
+
+    psk = sub.add_parser("skill", help="list / import / register skills (blessed catalog + your own; any git URL)")
+    psk.add_argument("action", choices=["list", "import", "add", "rm"])
+    psk.add_argument("--from", dest="from_git", default=None, help="git URL (to import, or to register/remove)")
+    psk.add_argument("--name", default=None, help="name when registering (add), overriding auto-resolve (import), or removing (rm)")
+    psk.add_argument("--tech", default=None, help="comma-separated tech tags when registering (add)")
+    psk.add_argument("--into", default=None, help="target project dir for import (default: cwd)")
+    psk.set_defaults(func=cmd_skill)
 
     po = sub.add_parser("overview", help="register/analyze the brief, architect the shared design, then split")
     po.add_argument("action", choices=["add", "analyze", "architect", "split"])

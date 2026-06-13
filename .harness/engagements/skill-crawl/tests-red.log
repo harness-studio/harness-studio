@@ -1,0 +1,41 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0
+rootdir: C:\Workspace\harness-studio
+configfile: pyproject.toml
+collected 29 items
+
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFF                                            [100%]
+=========================== short test summary info ===========================
+FAILED tests/test_skill.py::test_ac1_list_exits0_shows_blessed_catalog - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac2_list_shows_user_entries - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac3_list_handles_corrupt_skills_json - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac4_add_writes_skills_json - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac5_add_missing_name_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac5_add_missing_from_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac6_add_blessed_url_prints_already_known - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac7_add_same_url_twice_deduplicates - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac8_rm_after_add_round_trips_to_empty - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac9_rm_blessed_name_prints_not_in_registry - AssertionError: cmd_skill is not defined in cli.hssd
+FAILED tests/test_skill.py::test_ac10_rm_no_args_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac11_user_entry_same_name_as_blessed_is_removable - AssertionError: cmd_skill is not defined in cli.hssd
+FAILED tests/test_skill.py::test_ac12_import_creates_skill_md - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac13_import_strips_git_dir - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac14_name_stripped_from_repo_dir - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac14_name_override_with_name_arg - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac14_plain_name_no_prefix_stripping - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac15_import_idempotent - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac16_import_keeps_existing_skill_md - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac17_reimport_after_upstream_change_keeps_old - AssertionError: cmd_skill is not defined in cli.hssd
+FAILED tests/test_skill.py::test_ac18_import_missing_from_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac19_import_nested_skill_md_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac19_import_no_skill_md_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac20_into_directs_install - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac21_import_collides_with_blessed_python_blocks - AssertionError: cmd_skill is not defined in cli.hssd
+FAILED tests/test_skill.py::test_ac21_import_collides_with_blessed_harness_studio_blocks - AssertionError: cmd_skill is not defined in cli.hssd
+FAILED tests/test_skill.py::test_ac22_import_empty_name_after_prefix_strip_blocks - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac23_sync_preserves_user_imported_skill - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+FAILED tests/test_skill.py::test_ac24_real_home_skills_json_untouched - AssertionError: cmd_skill is not defined in cli.hssd (not implemented yet)
+29 failed in 0.96s
+
+NOTE: captured from interactive pytest run before any implementation. All 29 failures are
+"cmd_skill is not defined in cli.hssd (not implemented yet)" — correct red mode confirmed.
