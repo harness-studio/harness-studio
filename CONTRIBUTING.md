@@ -1,51 +1,106 @@
 # Contributing to Harness Studio
 
-> This kit exists to be **used, tested, and improved** by whoever receives it. Here's how to adopt it, give useful feedback, and extend the framework. The kit's own evolution follows the principle it preaches: every failure becomes a new guard.
+Harness Studio is an open source project. Contributions are welcome — whether you're
+fixing a bug, adding a command, writing a new agent card, or improving the docs.
 
-## How to adopt (start small)
+All changes go through the framework's own governance loop (dogfood). This means
+every non-trivial contribution follows P0→P4: intake → spec lock → red/green tests →
+adversarial verification → merge.
 
-1. Pick **one small, real engagement** (a feature, a bug, a vertical slice). Don't start with the whole company.
-2. Run the flow from `00-OPERATING-MANUAL.md` + `04-KICKOFF.md`, phase by phase.
-3. Use the fast lane for the trivial and the adversarial rigor for what's at risk of being wrong.
-4. Capture the AI Interaction Log live — it's your learning data.
+---
 
-## How to give useful feedback
+## Versioning rules
 
-Generic feedback ("seemed nice") doesn't help. What helps:
+**If something changed, it must be versioned.** No silent updates.
 
-- **Where a gate caught something** a naive flow would have missed. (Proof of value.)
-- **Where a role became bureaucracy** — spent tokens/time without adding value. (Candidate to cut or move to the fast lane.)
-- **Where the process broke** — a phase stalled, a handoff was ambiguous, an adversary gave too many false positives.
-- **What was missing** — a role, gate, or template you had to improvise.
+We follow [Semantic Versioning](https://semver.org/) with pre-release labels:
 
-### Feedback template (one per engagement)
-```markdown
-## Engagement: <what it was> — <date>
-- Lane used: fast / standard / deliberate
-- Gate that added the most: ...
-- Role that became bureaucracy: ...
-- Where it broke / created friction: ...
-- What was missing (role/gate/template): ...
-- Escape: did anything get through and get caught later? What?
-- Cost note: time/tokens vs perceived value
+| Change | Version bump | Example |
+|---|---|---|
+| Breaking CLI interface change | **Major** `X.0.0` | rename/remove a command, change state machine transitions, breaking `.harness/` schema change |
+| New command, new feature, new agent card, deprecation | **Minor** `0.X.0` | add `hssd intake`, add a new P4 adversary, deprecate `hssd overview` |
+| Bug fix, doc fix, infographic update, non-breaking improvement | **Patch** `0.0.X` | fix a latent bug in `cmd_skill`, update the infographic, fix a test |
+
+**Pre-1.0 (`0.x.y`):** minor versions carry significant new features and may include
+breaking changes. Patch versions are fixes only. The `-alpha.N` / `-beta.N` suffix
+signals the overall project maturity.
+
+**The rule in practice:**
+- Changed `cli/hssd.py` behavior → bump version in `pyproject.toml`
+- Added or changed a command → minor bump minimum
+- Changed the state machine → minor or major depending on backwards compatibility
+- Fixed a bug only → patch bump
+- Docs/presentation only → patch bump (optional — can batch with the next code change)
+
+**How to bump:**
+1. Edit `version` in `pyproject.toml`
+2. The `__version__` in `cli/hssd.py` reads from `importlib.metadata` automatically
+3. Update `CHANGELOG.md` under a new `## [X.Y.Z] — YYYY-MM-DD` header
+4. After merging: `git tag -a vX.Y.Z -m "<summary>"` + `git push origin vX.Y.Z`
+
+---
+
+## Getting started
+
+```bash
+git clone https://github.com/harness-studio/harness-studio
+cd harness-studio
+uv sync                    # install + dev dependencies
+uv run hssd --version      # verify
+uv run pytest              # run the test suite
 ```
 
-## How to extend the framework
+---
 
-The kit is modular. The most common extensions:
+## Making a change
 
-- **Add a role:** copy the format in `01-ROLES.md` (mandate, "rewarded for", takes→delivers). Remember the rule: if it's a role that builds, an adversary that judges it must exist.
-- **Add a gate:** prefer computational (test/lint/script) over inferential. Define what it **blocks** and with what evidence.
-- **Add a template:** put it in `templates/` and reference it in the relevant protocol.
-- **Tune autonomy:** promote a gate from "human" to "automatic" only when the escape rate proves the confidence; demote it when a surprise audit catches something.
+**Bug fix or small improvement:**
+```bash
+# 1. Write a failing test first (red)
+# 2. Fix the bug (green)
+# 3. Bump patch version in pyproject.toml
+# 4. Update CHANGELOG.md
+# 5. Open a PR
+```
 
-## The evolution principle (steering loop)
+**New command or feature:**
+```bash
+# 1. Open an intake (describe what you're adding and why)
+# 2. Get agreement on the spec before writing code
+# 3. Write tests from the spec (red)
+# 4. Implement (green)
+# 5. Bump minor version in pyproject.toml
+# 6. Update CHANGELOG.md
+# 7. Open a PR
+```
 
-The rule that keeps the kit honest: **every escaped defect becomes the question "what guide or gate would have caught this?"** — and the answer is added to the framework. The kit isn't born perfect; it hardens with every engagement. Whoever uses it and reports escapes is literally improving the product.
+**Breaking change:**
+- Open an issue first — breaking changes need discussion
+- Major version bump
+- Document the migration path in CHANGELOG.md
 
-## What would be great to get back
+---
 
-- Real (anonymized) AI Interaction Logs — they show where the method helps and where it gets in the way.
-- New domain-specific roles/gates/templates.
-- Cases where the harness was too heavy (to calibrate right-sizing).
-- Metrics: escape rate, first-pass, review toil, cost per delivery.
+## Agent cards and skills
+
+Agent cards live in `.claude/agents/` — one markdown file per role.
+Skills live in `.claude/skills/<name>/SKILL.md`.
+
+Adding a new agent card or skill:
+- Follow the format in `skills/SKILL-AUTHORING.md`
+- Test it by running the engagement loop with the new role
+- Minor version bump if adding, patch if fixing an existing card
+
+---
+
+## Reporting issues
+
+Open a GitHub issue with:
+- What you expected
+- What happened instead
+- The command you ran and its output
+- Your `hssd --version` output
+- Your OS and Python version
+
+The janitor also files issues automatically — if you see a janitor-filed issue,
+it means the framework detected the problem in its own codebase.

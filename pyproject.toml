@@ -1,6 +1,6 @@
 [project]
 name = "harness-studio"
-version = "0.1.0"
+version = "0.2.0a1"
 description = "Harness Studio — a governed, adversarial AI software-delivery framework (hssd CLI)."
 requires-python = ">=3.12"
 dependencies = [

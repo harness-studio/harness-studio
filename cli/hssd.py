@@ -27,6 +27,12 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("harness-studio")
+except Exception:
+    __version__ = "0.2.0a1"
+
 PKG_ROOT = Path(__file__).resolve().parent.parent  # the harness-studio package
 TEMPLATES = PKG_ROOT / "templates"
 AGENTS = PKG_ROOT / "agents"
@@ -444,7 +450,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"  .claude/: {nclaude} agent/skill file(s) installed, {sclaude} already present")
     if not (dest / ".git").exists():
         print("  note: no git repo here — branch/claim features need git (run: git init -b main)")
-    print('  next: hssd overview add <brief.md>  ·  hssd work add --title "..."  ·  hssd engage <id>')
+    size = _detect_project_size(dest)
+    if size == "blank":
+        print("  next: write .harness/project.md (vision, objectives, non-goals)")
+        print("        then: hssd project approve")
+    elif size == "substantial":
+        print("  detected: existing project with source files / manifests")
+        print("  next: review or create .harness/project.md — the AI can read your codebase and propose it")
+        print("        then: hssd project approve")
+    else:
+        print("  next: write .harness/project.md  (or describe your project so the AI can draft it)")
+        print("        then: hssd project approve")
     return 0
 
 
@@ -479,6 +495,191 @@ def cmd_sync(args: argparse.Namespace) -> int:
     _log(dest, "sync", f"files={n}")
     print(f"OK: re-synced {n} file(s) into .claude/ from the framework (agents, skills, commands).")
     return 0
+
+
+def cmd_project(args: argparse.Namespace) -> int:
+    """Human gate: approve project.md → transitions project to 'identified'."""
+    project = Path(".").resolve()
+    pm_path = project / ".harness" / "project.md"
+    lock = project / ".harness" / "locks" / "project.json"
+
+    if args.action == "show":
+        if pm_path.exists():
+            print(pm_path.read_text(encoding="utf-8"))
+        else:
+            print("No project.md yet. Create it at .harness/project.md, then run: hssd project approve")
+        return 0
+
+    if args.action == "check":
+        if lock.exists():
+            meta = json.loads(lock.read_text(encoding="utf-8"))
+            print(f"project: IDENTIFIED · approved {meta.get('approved_at', '?')} by {meta.get('by', '?')}")
+        else:
+            print("project: NOT identified. Approve with: hssd project approve")
+        return 0
+
+    # approve
+    if not pm_path.exists():
+        print("BLOCK: .harness/project.md does not exist.\n"
+              "  Create it with vision, objectives, non-goals, and principles.\n"
+              "  Then run: hssd project approve", file=sys.stderr)
+        return 1
+    body = pm_path.read_text(encoding="utf-8").strip()
+    if len(body) < 80:
+        print("BLOCK: .harness/project.md looks like a stub (under 80 chars). "
+              "Fill it in before approving.", file=sys.stderr)
+        return 1
+    _locks_dir(project).mkdir(parents=True, exist_ok=True)
+    meta = {
+        "approved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "by": os.environ.get("USER") or os.environ.get("USERNAME") or "engineer",
+        "project_md_path": ".harness/project.md",
+    }
+    lock.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _log(project, "project approve", "project.md locked")
+    print("✓ project IDENTIFIED — .harness/project.md approved.")
+    print("  next: hssd overview architect  →  hssd architecture approve")
+    return 0
+
+
+def cmd_intake(args: argparse.Namespace) -> int:
+    """Intake cycle: add a demand, list intakes, approve to release stories to backlog."""
+    project = Path(".").resolve()
+    con = _pm(project)
+
+    try:
+        if args.action == "list":
+            rows = con.execute(
+                "SELECT id, title, status, created_at FROM intakes ORDER BY created_at DESC"
+            ).fetchall()
+            if not rows:
+                print("(no intakes yet — run: hssd intake add <brief.md>)")
+                return 0
+            for iid, title, status, created_at in rows:
+                print(f"  {iid}  [{status:<10}]  {title}  ({created_at[:10]})")
+            return 0
+
+        if args.action == "show":
+            if not args.id:
+                print("BLOCK: provide an intake id", file=sys.stderr); return 1
+            row = con.execute(
+                "SELECT id, title, brief_path, status, created_at FROM intakes WHERE id=?",
+                (args.id,)
+            ).fetchone()
+            if not row:
+                print(f"BLOCK: intake {args.id} not found", file=sys.stderr); return 1
+            iid, title, brief_path, status, created_at = row
+            print(f"intake: {iid}\ntitle:  {title}\nstatus: {status}\ncreated:{created_at}")
+            if brief_path and Path(brief_path).exists():
+                print(f"\n--- brief ({brief_path}) ---")
+                print(Path(brief_path).read_text(encoding="utf-8"))
+            return 0
+
+        if args.action == "add":
+            brief_path = args.file
+            title = args.title or (Path(brief_path).stem if brief_path else "untitled")
+            if brief_path and not Path(brief_path).exists():
+                print(f"BLOCK: file not found: {brief_path}", file=sys.stderr); return 1
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            iid = f"INT-{now[:10].replace('-','')}-{abs(hash(title)) % 9999:04d}"
+            con.execute(
+                "INSERT INTO intakes(id, title, brief_path, status, created_at) VALUES(?,?,?,?,?)",
+                (iid, title, brief_path, "draft", now)
+            )
+            con.commit()
+            _log(project, "intake add", f"{iid} {title}")
+            print(f"✓ intake {iid} added (status=draft)")
+            print(f"  next: groom + split stories, then: hssd intake approve {iid}")
+            return 0
+
+        if args.action == "approve":
+            if not args.id:
+                print("BLOCK: provide an intake id", file=sys.stderr); return 1
+            row = con.execute("SELECT id, title FROM intakes WHERE id=?", (args.id,)).fetchone()
+            if not row:
+                print(f"BLOCK: intake {args.id} not found", file=sys.stderr); return 1
+            con.execute("UPDATE intakes SET status='approved' WHERE id=?", (args.id,))
+            con.commit()
+            _log(project, "intake approve", args.id)
+            print(f"✓ intake {args.id} approved — stories are now eligible for iteration planning")
+            print("  next: hssd iteration plan  →  hssd iteration activate <id>")
+            return 0
+
+        print(f"unknown action: {args.action}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+
+
+def cmd_iteration(args: argparse.Namespace) -> int:
+    """Iterations: plan → activate (variadic, starts 1 or N in parallel) → list → converge."""
+    project = Path(".").resolve()
+    con = _pm(project)
+
+    try:
+        if args.action == "list":
+            rows = con.execute(
+                "SELECT id, goal, status, intake_id, created_at FROM iterations ORDER BY created_at DESC"
+            ).fetchall()
+            if not rows:
+                print("(no iterations yet — run: hssd iteration plan)")
+                return 0
+            for iid, goal, status, intake_id, created_at in rows:
+                src = f"  ← {intake_id}" if intake_id else ""
+                print(f"  {iid}  [{status:<10}]  {goal or '(no goal)'}{src}")
+            return 0
+
+        if args.action == "plan":
+            goal = args.goal or ""
+            intake_id = args.intake or None
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            iid = f"ITER-{now[:10].replace('-','')}-{abs(hash(goal + now)) % 9999:04d}"
+            con.execute(
+                "INSERT INTO iterations(id, goal, status, intake_id, created_at) VALUES(?,?,?,?,?)",
+                (iid, goal, "planned", intake_id, now)
+            )
+            con.commit()
+            _log(project, "iteration plan", f"{iid} {goal}")
+            print(f"✓ iteration {iid} planned")
+            print(f"  next: hssd iteration activate {iid}")
+            return 0
+
+        if args.action == "activate":
+            if not args.ids:
+                print("BLOCK: provide one or more iteration ids", file=sys.stderr); return 1
+            activated = []
+            for iid in args.ids:
+                row = con.execute("SELECT id, status FROM iterations WHERE id=?", (iid,)).fetchone()
+                if not row:
+                    print(f"  SKIP: {iid} not found")
+                    continue
+                con.execute("UPDATE iterations SET status='active' WHERE id=?", (iid,))
+                activated.append(iid)
+            con.commit()
+            n = len(activated)
+            _log(project, "iteration activate", f"{n} iterations: {' '.join(activated)}")
+            if n == 1:
+                print(f"✓ {activated[0]} activated — 1 engineering loop started")
+            else:
+                print(f"✓ {n} iterations activated in parallel: {', '.join(activated)}")
+                print("  caller manages orchestration — each runs its own P0→P4 loop")
+            return 0
+
+        if args.action == "converge":
+            # args.ids may capture the id when ids (nargs="*") is greedy
+            converge_id = args.id or (args.ids[0] if args.ids else None)
+            if not converge_id:
+                print("BLOCK: provide an iteration id", file=sys.stderr); return 1
+            con.execute("UPDATE iterations SET status='done' WHERE id=?", (converge_id,))
+            con.commit()
+            _log(project, "iteration converge", converge_id)
+            print(f"✓ iteration {converge_id} marked done — worktree ready to merge")
+            return 0
+
+        print(f"unknown action: {args.action}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
 
 
 def _union_lines(target: Path, incoming: str) -> None:
@@ -858,6 +1059,23 @@ def _pm(project: Path) -> sqlite3.Connection:
             con.execute(f"ALTER TABLE work_items ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS intakes ("
+        "id TEXT PRIMARY KEY, title TEXT NOT NULL, brief_path TEXT, "
+        "status TEXT NOT NULL DEFAULT 'draft', "
+        "created_at TEXT NOT NULL)"
+    )
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS iterations ("
+        "id TEXT PRIMARY KEY, goal TEXT, status TEXT NOT NULL DEFAULT 'planned', "
+        "intake_id TEXT, created_at TEXT NOT NULL)"
+    )
+    # upgrade older DBs
+    for col in ("intake_id TEXT",):
+        try:
+            con.execute(f"ALTER TABLE iterations ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     con.commit()
     return con
 
@@ -928,6 +1146,40 @@ def _architecture_locked(project: Path) -> bool:
     return _arch_lock_path(project).exists()
 
 
+def _is_project_identified(project: Path) -> bool:
+    """True when project.md has been human-approved (project.json lock exists)."""
+    return (project / ".harness" / "locks" / "project.json").exists()
+
+
+def _detect_project_size(dest: Path) -> str:
+    """Returns 'blank', 'substantial', or 'ambiguous' by scanning source files + manifests."""
+    sig_exts = {".py", ".ts", ".js", ".go", ".java", ".rb", ".cs", ".php", ".rs", ".swift",
+                ".kt", ".scala", ".vue", ".svelte", ".tsx", ".jsx"}
+    manifests = {"pyproject.toml", "package.json", "go.mod", "pom.xml", "Cargo.toml",
+                 "requirements.txt", "Gemfile", "composer.json", "build.gradle"}
+    source_files: list[Path] = []
+    found_manifests: list[str] = []
+    try:
+        for f in dest.rglob("*"):
+            if not f.is_file():
+                continue
+            # skip hidden dirs and common noise
+            parts = f.relative_to(dest).parts
+            if any(p.startswith(".") or p in ("node_modules", "__pycache__", ".venv", "venv") for p in parts):
+                continue
+            if f.suffix in sig_exts:
+                source_files.append(f)
+            if f.name in manifests:
+                found_manifests.append(f.name)
+    except PermissionError:
+        pass
+    if found_manifests or len(source_files) > 5:
+        return "substantial"
+    if len(source_files) == 0:
+        return "blank"
+    return "ambiguous"
+
+
 def _file_sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
 
@@ -952,19 +1204,18 @@ def _adr_is_stub(body: str) -> bool:
 
 # The PROJECT state machine is NON-TERMINAL: after the foundation it enters 'operational' and stays
 # there for life (development → deploy → maintenance → more features). What terminates is a SPRINT.
-_STATE_ORDER = ["initialized", "briefed", "architected", "planned", "operational"]
+_STATE_ORDER = ["initialized", "identified", "architected", "operational"]
 
 
 def _project_state(project: Path) -> dict:
-    """Infer the project phase + the current sprint. The project never reaches a terminal 'done':
-    once a sprint has been opened it is 'operational' forever. Sprints are what carry deliverables."""
+    """Infer the project phase. The project never reaches a terminal 'done':
+    once operational it runs intake cycles forever."""
     h = project / ".harness"
     s = {
         "initialized": h.exists(),
-        "briefed": (h / "overview.md").exists(),
+        "identified": _is_project_identified(project),
         "architected": _architecture_locked(project),
-        "planned": False,       # product backlog exists (analyze + split done)
-        "operational": False,   # ≥1 sprint ever opened — the live, never-ending state
+        "operational": False,
     }
     sprint = None
     sprint_items: list[str] = []
@@ -972,59 +1223,62 @@ def _project_state(project: Path) -> dict:
     if pm.exists():
         con = sqlite3.connect(pm)
         try:
-            n_items = con.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
-            n_sprints = con.execute("SELECT COUNT(*) FROM sprints").fetchone()[0]
+            try:
+                n_intakes = con.execute(
+                    "SELECT COUNT(*) FROM intakes WHERE status='approved'"
+                ).fetchone()[0]
+                s["operational"] = s["architected"] and n_intakes > 0
+            except sqlite3.OperationalError:
+                # intakes table not yet migrated — fall back to sprint count
+                try:
+                    n_sprints = con.execute("SELECT COUNT(*) FROM sprints").fetchone()[0]
+                    s["operational"] = s["architected"] and n_sprints > 0
+                except sqlite3.OperationalError:
+                    pass
             sprint = _current_sprint(con)
             if sprint:
                 sprint_items = [r[0] for r in con.execute(
                     "SELECT status FROM work_items WHERE sprint_id=?", (sprint[0],))]
         except sqlite3.OperationalError:
-            n_items = n_sprints = 0
+            pass
         finally:
             con.close()
-        s["planned"] = n_items > 0
-        s["operational"] = s["architected"] and n_sprints > 0
-    # phase = the furthest milestone reached; 'operational' is the final, INFINITE state (no terminal)
     if not s["initialized"]:
-        phase = "uninitialized"
-    elif not s["briefed"]:
+        phase = "not_initialized"
+    elif not s["identified"]:
         phase = "initialized"
     elif not s["architected"]:
-        phase = "briefed"
+        phase = "identified"
     elif not s["operational"]:
-        phase = "planned" if s["planned"] else "architected"
+        phase = "architected"
     else:
         phase = "operational"
     s["phase"] = phase
-    s["stale_plan"] = s["planned"] and not s["architected"]
-    s["sprint"] = sprint            # (id, goal, status) or None
+    s["sprint"] = sprint
     s["sprint_items"] = sprint_items
     return s
 
 
 def _project_next(project: Path, s: dict) -> str:
-    """The single next command, given the project phase and the current sprint."""
     phase = s["phase"]
     base = {
-        "uninitialized": "hssd init",
-        "initialized": "hssd overview add <brief.md>",
-        "briefed": "hssd overview architect  →  hssd architecture approve",
-        "architected": "hssd overview analyze  →  hssd overview split",
-        "planned": "hssd sprint plan   (open the first sprint)",
+        "not_initialized": "hssd init",
+        "initialized":     "hssd project approve   (after writing / reviewing .harness/project.md)",
+        "identified":      "hssd overview architect  →  hssd architecture approve",
+        "architected":     "hssd intake add <brief.md>   (first intake → operational)",
     }
     if phase in base:
         return base[phase]
-    # operational: the next move depends on the current sprint
     sprint = s["sprint"]
     if not sprint:
-        return "hssd sprint plan   (open the next iteration / maintenance round)"
+        return "hssd intake add <brief.md>   (or: hssd sprint plan)"
     _sid, _goal, sstatus = sprint
     if sstatus == "review":
         return "hssd sprint close"
     items = s["sprint_items"]
     if items and all(x == "done" for x in items):
         return "hssd sprint review"
-    return "hssd engage <LOC-id>   (a story in this sprint)"
+    return "hssd engage <id>   (a story in the current sprint)"
 
 
 def _write_state_snapshot(project: Path, s: dict) -> None:
@@ -1044,19 +1298,18 @@ def cmd_status(args: argparse.Namespace) -> int:
     _write_state_snapshot(project, s)
     print("Harness Studio · project state\n")
     rows = [
-        ("initialized", "initialized", "repo adopted"),
-        ("briefed", "briefed", "overview captured"),
-        ("architected", "architected", "architecture locked (human)"),
-        ("planned", "planned", "product backlog split"),
-        ("operational", "operational", "live — runs sprints, never 'done'"),
+        ("initialized",  "initialized",  "repo adopted (hssd init ran)"),
+        ("identified",   "identified",   "project.md approved (human)"),
+        ("architected",  "architected",  "architecture locked (human)"),
+        ("operational",  "operational",  "live — intake cycles, never 'done'"),
     ]
+    # show not_initialized if not yet init
+    if not s["initialized"]:
+        print("  ▸ not_initialized   run hssd init to get started")
     for key, label, desc in rows:
         mark = "✓" if s[key] else ("▸" if s["phase"] == key else "·")
         here = "   ← project is here" if s["phase"] == key else ""
-        print(f"  {mark} {label:<13}{desc}{here}")
-    if s["stale_plan"]:
-        print("\n  ⚠ backlog built before the architecture lock — re-split so stories inherit the ADR:")
-        print("      hssd architecture approve → hssd reset --backlog → analyze → split")
+        print(f"  {mark} {label:<13} {desc}{here}")
     sprint = s["sprint"]
     print()
     if sprint:
@@ -1065,7 +1318,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         done = sum(1 for x in items if x == "done")
         print(f"  ▶ sprint {sid} · {goal or '(no goal)'} — {sstatus.upper()}  "
               f"[{done}/{len(items)} done]")
-    elif s["operational"] or s["planned"]:
+    elif s["operational"]:
         print("  (no open sprint)")
     print(f"\n  next: {_project_next(project, s)}")
     return 0
@@ -1641,6 +1894,7 @@ def _print_plan(data: dict) -> list[dict]:
 
 
 def cmd_overview(args: argparse.Namespace) -> int:
+    print("⚠  'hssd overview' is deprecated — use 'hssd intake' for the new intake cycle.", file=sys.stderr)
     project = Path(".").resolve()
     ov = project / ".harness" / "overview.md"
     plan_path = project / ".harness" / "plan.json"
@@ -2196,6 +2450,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="hssd",
         description="Harness Studio — the engine for the governed, adversarial AI-coding workflow")
+    p.add_argument("--version", action="version", version=f"hssd {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("new", help="create a project (empty governed, or from a template repo via --from)")
@@ -2206,6 +2461,25 @@ def main(argv: list[str] | None = None) -> int:
     pi = sub.add_parser("init", help="turn ON Harness Studio in an existing repo (non-destructive)")
     pi.add_argument("path", nargs="?", default=".", help="repo to adopt (default: current dir)")
     pi.set_defaults(func=cmd_init)
+
+    pproj = sub.add_parser("project", help="project identity: approve project.md (→ 'identified' state)")
+    pproj.add_argument("action", choices=["approve", "show", "check"])
+    pproj.set_defaults(func=cmd_project)
+
+    pint = sub.add_parser("intake", help="intake cycle: add a demand, list, approve to release stories")
+    pint.add_argument("action", choices=["add", "list", "show", "approve"])
+    pint.add_argument("id", nargs="?", help="intake id (for show/approve)")
+    pint.add_argument("file", nargs="?", help="brief file path (for add)")
+    pint.add_argument("--title", default="", help="intake title (for add)")
+    pint.set_defaults(func=cmd_intake)
+
+    piter = sub.add_parser("iteration", help="iterations: plan, activate (variadic), list, converge")
+    piter.add_argument("action", choices=["plan", "activate", "list", "converge"])
+    piter.add_argument("ids", nargs="*", help="iteration id(s) for activate")
+    piter.add_argument("id", nargs="?", help="iteration id for converge")
+    piter.add_argument("--goal", default="", help="iteration goal (for plan)")
+    piter.add_argument("--intake", default=None, help="source intake id (for plan)")
+    piter.set_defaults(func=cmd_iteration)
 
     psy = sub.add_parser("sync", help="re-sync .claude/ (agents, skills, commands) from the framework (overwrites)")
     psy.set_defaults(func=cmd_sync)
