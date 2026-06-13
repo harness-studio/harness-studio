@@ -1,0 +1,12 @@
+{
+  "phase": "initialized",
+  "milestones": {
+    "initialized": true,
+    "briefed": false,
+    "architected": false,
+    "planned": false,
+    "operational": false
+  },
+  "sprint": null,
+  "updated_at": "2026-06-13T20:00:52.430440+00:00"
+}

@@ -17,7 +17,7 @@
 
 ## Phases & process
 
-- **P0–P5 / Phase 0–5** — the six engagement phases: **P0 Intake**, **P1 Stories & Acceptance Criteria**, **P2 Architecture**, **P3 Build**, **P4 Verify**, **P5 Package & Deliver**.
+- **P0–P5 / Phase 0–5** — the six engagement phases: **P0 Intake**, **P1 Stories & Acceptance Criteria**, **P2 Architecture**, **P3 Build** (P3a Red → P3b Green), **P4 Verify**, **P5 Integration & Delivery** (the human MERGE gate).
 - **AC — Acceptance Criteria** — the objective, *testable* conditions that define when work is done. Every "guarantee/atomic/concurrency" requirement must become a concrete test.
 - **DoD — Definition of Done** — the full set of acceptance criteria for an engagement; the objective contract for "finished".
 - **Story** — a deliverable described from the user's point of view; paired with its acceptance criteria in Phase 1.

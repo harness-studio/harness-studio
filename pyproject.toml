@@ -3,7 +3,10 @@ name = "harness-studio"
 version = "0.1.0"
 description = "Harness Studio — a governed, adversarial AI software-delivery framework (hssd CLI)."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.11.0",
+    "pillow>=12.2.0",
+]
 
 [project.scripts]
 hssd = "cli.hssd:main"
@@ -15,6 +18,14 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["cli"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.17",
+]
 
 # NOTE: the data dirs (agents/, skills/, templates/, scaffolds/, workflows/) resolve from the repo
 # in an EDITABLE install (the CLI finds them relative to its own file). Bundling them into a wheel

@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1200px; height: 900px; overflow: hidden;
+    background: #0d1117;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #e6edf3;
+    display: flex; flex-direction: column;
+  }
+
+  /* ══ HEADER ══ */
+  .header {
+    padding: 12px 18px 0 18px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    flex-shrink: 0;
+  }
+  .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+  .tagline { font-size: 11px; color: #8b949e; margin-top: 2px; }
+
+  /* state bar */
+  .state-bar { display: flex; align-items: center; gap: 0; flex-shrink: 0; }
+  .st { display: flex; align-items: center; gap: 4px; padding: 3px 7px; font-size: 10px; }
+  .st-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .st-arr { color: #30363d; font-size: 12px; }
+  .st-gray  { color: #484f58; } .dot-gray  { background: #30363d; }
+  .st-blue  { color: #58a6ff; } .dot-blue  { background: #58a6ff; }
+  .st-green { color: #3fb950; } .dot-green { background: #3fb950; }
+
+  /* ══ THREE-COLUMN BODY ══ */
+  .columns {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.15fr;
+    align-items: start;
+    gap: 8px;
+    padding: 8px 14px 6px 14px;
+    min-height: 0;
+  }
+
+  .col {
+    display: flex; flex-direction: column; gap: 0;
+    border-radius: 8px; overflow: hidden;
+    min-height: 0;
+  }
+  .col-blue   { background: rgba(88,166,255,0.04);  border: 1px solid rgba(88,166,255,0.2); }
+  .col-green  { background: rgba(63,185,80,0.04);   border: 1px solid rgba(63,185,80,0.2); }
+  .col-orange { background: rgba(240,136,62,0.04);  border: 1px solid rgba(240,136,62,0.2); }
+
+  .col-header {
+    padding: 6px 10px 5px;
+    font-size: 9px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .ch-blue   { color: #58a6ff; background: rgba(88,166,255,0.1); }
+  .ch-green  { color: #3fb950; background: rgba(63,185,80,0.1); }
+  .ch-orange { color: #f0883e; background: rgba(240,136,62,0.1); }
+
+  .col-body {
+    flex: 1; padding: 8px 10px; display: flex; flex-direction: column;
+    align-items: center; gap: 0; overflow: hidden;
+  }
+
+  /* ══ FLOW NODES ══ */
+  .node {
+    width: 100%; border-radius: 6px; padding: 6px 9px;
+    flex-shrink: 0;
+  }
+  .node-title { font-size: 11px; font-weight: 700; margin-bottom: 2px; }
+  .node-sub   { font-size: 9.5px; line-height: 1.45; }
+
+  .n-blue   { background: rgba(88,166,255,0.11);  border: 1px solid rgba(88,166,255,0.28);  color: #58a6ff; }
+  .n-blue   .node-sub { color: rgba(88,166,255,0.72); }
+  .n-green  { background: rgba(63,185,80,0.11);   border: 1px solid rgba(63,185,80,0.28);   color: #3fb950; }
+  .n-green  .node-sub { color: rgba(63,185,80,0.72); }
+  .n-orange { background: rgba(240,136,62,0.11);  border: 1px solid rgba(240,136,62,0.28);  color: #f0883e; }
+  .n-orange .node-sub { color: rgba(240,136,62,0.72); }
+  .n-teal   { background: rgba(56,189,248,0.1);   border: 1px solid rgba(56,189,248,0.28);  color: #38bdf8; }
+  .n-teal   .node-sub { color: rgba(56,189,248,0.7); }
+  .n-purple { background: rgba(163,113,247,0.1);  border: 1px solid rgba(163,113,247,0.28); color: #a371f7; }
+  .n-purple .node-sub { color: rgba(163,113,247,0.7); }
+  .n-ship   { background: rgba(63,185,80,0.1);    border: 1px solid rgba(63,185,80,0.28);   color: #3fb950; }
+  .n-ship   .node-sub { color: rgba(63,185,80,0.7); }
+
+  /* split node (two paths side by side) */
+  .split-node {
+    width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; flex-shrink: 0;
+  }
+  .split-item {
+    border-radius: 5px; padding: 5px 7px; font-size: 10px;
+    line-height: 1.4; text-align: center;
+  }
+  .si-solid { background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.3);  color: #58a6ff; }
+  .si-dash  { background: rgba(88,166,255,0.06); border: 1px dashed rgba(88,166,255,0.25); color: #6e9fd6; }
+
+  /* arrow */
+  .dn-arrow {
+    font-size: 14px; color: #30363d; line-height: 1;
+    padding: 1px 0; flex-shrink: 0; text-align: center; width: 100%;
+  }
+
+  /* gate */
+  .gate-row {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    background: rgba(227,179,65,0.07); border: 1px solid rgba(227,179,65,0.22);
+    border-radius: 6px; padding: 5px 9px; flex-shrink: 0;
+  }
+  .gate-diamond {
+    width: 11px; height: 11px; background: #e3b341; transform: rotate(45deg);
+    flex-shrink: 0; border: 1.5px solid #f0c843;
+  }
+  .gate-text { font-size: 10px; font-weight: 700; color: #e3b341; }
+  .gate-sub  { font-size: 9px; color: rgba(227,179,65,0.65); margin-left: auto; }
+
+  /* P3 red/green */
+  .rg-row { display: flex; gap: 5px; width: 100%; flex-shrink: 0; }
+  .rg-tag { flex: 1; border-radius: 4px; padding: 4px 6px; font-size: 9.5px; font-weight: 700; text-align: center; }
+  .rg-red   { background: rgba(248,81,73,0.14);  border: 1px solid rgba(248,81,73,0.3);  color: #f85149; }
+  .rg-green { background: rgba(63,185,80,0.14);  border: 1px solid rgba(63,185,80,0.3);  color: #3fb950; }
+
+  /* P4 fanout */
+  .p4-box {
+    width: 100%; border-radius: 6px; flex-shrink: 0;
+    background: rgba(240,136,62,0.09); border: 1px solid rgba(240,136,62,0.25);
+    padding: 6px 9px;
+  }
+  .p4-title { font-size: 10px; font-weight: 700; color: #f0883e; margin-bottom: 4px; }
+  .p4-item  { font-size: 9.5px; color: #8b949e; line-height: 1.55; }
+  .p4-item span { color: #c9d1d9; }
+  .p4-loop  { font-size: 9px; color: rgba(240,136,62,0.55); font-style: italic; margin-top: 3px; }
+
+  /* parallel badge */
+  .parallel-box {
+    width: 100%; border-radius: 6px; flex-shrink: 0;
+    background: rgba(63,185,80,0.07); border: 1px dashed rgba(63,185,80,0.3);
+    padding: 5px 9px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9.5px; color: #3fb950; line-height: 1.6;
+  }
+  .parallel-box .pl { color: rgba(63,185,80,0.55); }
+
+  /* ══ CONCEPT PANELS ══ */
+  .bottom {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 6px; padding: 0 14px 10px 14px;
+    flex-shrink: 0;
+  }
+  .cp {
+    background: #161b22; border: 1px solid #21262d;
+    border-radius: 7px; padding: 8px 10px;
+  }
+  .cp-title { font-size: 10.5px; font-weight: 700; color: #e6edf3; margin-bottom: 4px; }
+  .cp-body  { font-size: 9.5px; color: #8b949e; line-height: 1.5; }
+  .cp-body strong { color: #c9d1d9; }
+
+  /* ══ FOOTER ══ */
+  .footer {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0 16px 8px 16px; flex-shrink: 0;
+  }
+  .footer-url { font-size: 9.5px; color: #30363d; }
+  .gates-row  { display: flex; align-items: center; gap: 6px; }
+  .gc {
+    display: flex; align-items: center; gap: 3px;
+    background: rgba(227,179,65,0.09); border: 1px solid rgba(227,179,65,0.22);
+    border-radius: 4px; padding: 2px 7px; color: #e3b341; font-size: 9px; font-weight: 600;
+  }
+  .gc-d { width: 6px; height: 6px; background: #e3b341; transform: rotate(45deg); }
+  .gates-label { font-size: 9px; color: #484f58; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div>
+    <h1>Harness Studio</h1>
+    <div class="tagline">AI builds the software, the system governs it. Whoever does the work never grades its own "done."</div>
+  </div>
+  <div class="state-bar">
+    <div class="st st-gray"><span class="st-dot dot-gray"></span>not_initialized</div>
+    <span class="st-arr">›</span>
+    <div class="st st-blue"><span class="st-dot dot-blue"></span>initialized</div>
+    <span class="st-arr">›</span>
+    <div class="st st-blue"><span class="st-dot dot-blue"></span>identified</div>
+    <span class="st-arr">›</span>
+    <div class="st st-blue"><span class="st-dot dot-blue"></span>architected</div>
+    <span class="st-arr">›</span>
+    <div class="st st-green"><span class="st-dot dot-green"></span>operational ∞</div>
+  </div>
+</div>
+
+<!-- THREE COLUMNS -->
+<div class="columns">
+
+  <!-- ══ COL 1: FOUNDATION ══ -->
+  <div class="col col-blue">
+    <div class="col-header ch-blue">Foundation — once per project</div>
+    <div class="col-body">
+
+      <div class="split-node">
+        <div class="split-item si-solid"><strong>hssd init</strong><br>new project</div>
+        <div class="split-item si-dash"><strong>hssd adopt</strong><br>existing codebase</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-blue">
+        <div class="node-title">project.md</div>
+        <div class="node-sub">vision · objectives · non-goals<br>principles · north star</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="gate-row">
+        <div class="gate-diamond"></div>
+        <div class="gate-text">Human: Project Approve</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-blue">
+        <div class="node-title">Architect</div>
+        <div class="node-sub">propose stack · data model<br>concurrency · deployment tier<br>simplest alternative noted</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-blue" style="opacity:0.8">
+        <div class="node-title">Architecture Adversary</div>
+        <div class="node-sub">attacks design · finds failure modes<br>advises & challenges · advisory</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="gate-row">
+        <div class="gate-diamond"></div>
+        <div class="gate-text">Human: Architecture Lock</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-blue" style="opacity:0.75">
+        <div class="node-title">ADR — locked &amp; versioned</div>
+        <div class="node-sub">immutable after approval<br>pivot → new version<br>all intakes inherit this</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ COL 2: OPERATIONAL CYCLE ══ -->
+  <div class="col col-green">
+    <div class="col-header ch-green">Operational Cycle — repeats ∞</div>
+    <div class="col-body">
+
+      <div class="node n-purple">
+        <div class="node-title">🔍 Janitor (continuous)</div>
+        <div class="node-sub">drift · debt · latent bugs<br>→ files new intakes automatically</div>
+      </div>
+      <div class="dn-arrow" style="color:#a371f7">↓</div>
+
+      <div class="node n-teal">
+        <div class="node-title">Intake</div>
+        <div class="node-sub">
+          manual · structured · unstructured · operational<br>
+          <span style="color:rgba(56,189,248,0.55)">1. grooming (product-analyst + skeptic)</span><br>
+          <span style="color:rgba(56,189,248,0.55)">2. architecture lite (inherits ADR)</span><br>
+          <span style="color:rgba(56,189,248,0.55)">3. split → stories in backlog</span>
+        </div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-green">
+        <div class="node-title">Backlog</div>
+        <div class="node-sub">stories with verifiable AC<br>size: small or medium only<br>large stories split before entry</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-green">
+        <div class="node-title">Iteration Planning</div>
+        <div class="node-sub">pick stories → assign to iterations<br>plan now · activate when ready<br>sequence or parallel — your choice</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="parallel-box">
+        hssd iteration activate id<span class="pl">         → 1 process</span><br>
+        hssd iteration activate id1 id2 id3<span class="pl"> → 3 parallel</span><br>
+        hssd iteration activate id1 ... id20<span class="pl"> → fleet</span>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-green">
+        <div class="node-title">Converge</div>
+        <div class="node-sub">worktrees merge → main<br>dependency order · conflicts resolved<br>janitor watches for drift between worktrees</div>
+      </div>
+      <div class="dn-arrow" style="color:#3fb950">↩ next intake</div>
+
+    </div>
+  </div>
+
+  <!-- ══ COL 3: ENGINEERING LOOP ══ -->
+  <div class="col col-orange">
+    <div class="col-header ch-orange">Inside an Iteration — Engineering Loop (per story · maker ≠ checker)</div>
+    <div class="col-body">
+
+      <div class="node n-orange">
+        <div class="node-title">P0 Intake</div>
+        <div class="node-sub">product-analyst · definition-skeptic<br>→ assumptions.md (all decisions recorded)</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-orange">
+        <div class="node-title">P1 Stories &amp; Acceptance Criteria</div>
+        <div class="node-sub">story-writer → Gherkin AC<br>ac-adversary attacks: testable? complete? in-scope?</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-orange">
+        <div class="node-title">P2 Architecture</div>
+        <div class="node-sub">architect designs (not code)<br>skills applied · adversary validates vs ADR</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="gate-row">
+        <div class="gate-diamond"></div>
+        <div class="gate-text">Human: Spec Lock</div>
+        <div class="gate-sub">no code before this</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="rg-row">
+        <div class="rg-tag rg-red">P3a RED — tests FAIL first</div>
+        <div class="rg-tag rg-green">P3b GREEN — impl passes</div>
+      </div>
+      <div style="font-size:9px;color:#484f58;text-align:center;padding:2px 0;flex-shrink:0">test-author ≠ builder · both logs kept as evidence</div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="p4-box">
+        <div class="p4-title">P4 Verify — adversarial fan-out</div>
+        <div class="p4-item">● <span>Independent Verifier</span> — every AC ↔ every test</div>
+        <div class="p4-item">● <span>Completion Challenger</span> — proves NOT done</div>
+        <div class="p4-item">● <span>Test Adversary</span> — vacuous tests, races</div>
+        <div class="p4-item">● <span>Regression Hunter</span> — what broke?</div>
+        <div class="p4-item">● <span>Security Adversary</span> — injection, auth, leaks</div>
+        <div class="p4-loop">any BLOCK → back to P3b · loop until dry</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="gate-row">
+        <div class="gate-diamond"></div>
+        <div class="gate-text">Human: Merge</div>
+        <div class="gate-sub">review evidence first</div>
+      </div>
+      <div class="dn-arrow">↓</div>
+
+      <div class="node n-ship">
+        <div class="node-title">Shipped ✓</div>
+        <div class="node-sub">hssd work done · worktree merged<br>evidence archived in .harness/</div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- CONCEPT PANELS -->
+<div class="bottom">
+  <div class="cp">
+    <div class="cp-title">⚖️ Maker ≠ Checker</div>
+    <div class="cp-body">The builder never certifies its own work. Every role runs in an isolated context — the one who builds never grades their own "done."</div>
+  </div>
+  <div class="cp">
+    <div class="cp-title">🎯 Project Identity</div>
+    <div class="cp-body"><strong>project.md</strong> anchors everything. Out-of-scope work is rejected at intake grooming, not at review time. Identity is not a sprint goal.</div>
+  </div>
+  <div class="cp">
+    <div class="cp-title">🔧 Fix the harness, not the code</div>
+    <div class="cp-body">Every escaped defect becomes a new guard. <strong>Skills</strong> encode blessed conventions — concurrency, indexing, datetime, API — applied at P2 and P4.</div>
+  </div>
+  <div class="cp">
+    <div class="cp-title">💾 .harness/ — durable memory</div>
+    <div class="cp-body">On-disk project spine: decisions, logs &amp; evidence. The AI interaction log is captured <strong>continuously</strong> — not reconstructed at the end.</div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <div class="footer-url">github.com/harness-studio/harness-studio</div>
+  <div class="gates-row">
+    <span class="gates-label">Four human gates →</span>
+    <div class="gc"><div class="gc-d"></div> Project Approve</div>
+    <div class="gc"><div class="gc-d"></div> Architecture Lock</div>
+    <div class="gc"><div class="gc-d"></div> Spec Lock</div>
+    <div class="gc"><div class="gc-d"></div> Merge</div>
+  </div>
+</div>
+
+</body>
+</html>

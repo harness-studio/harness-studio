@@ -1,0 +1,9 @@
+# .harness — COMMIT the auditable state (engagements, decisions/assumptions, the backlog,
+# logs that feed the AI Interaction Log & ADR). Ignore only ephemeral / secret / large bits.
+cache/
+tmp/
+*.tmp
+*.lock
+.env
+*.env
+secrets*

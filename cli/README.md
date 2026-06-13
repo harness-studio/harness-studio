@@ -1,6 +1,6 @@
-# hssd CLI (skeleton)
+# hssd CLI
 
-A stdlib-only Python skeleton of the Harness Studio CLI. Production targets Python 3.12 and ships as `harness-sd` (long) / `hssd` (short).
+A stdlib-only Python implementation of the Harness Studio CLI — the engine that drives the workflow. Targets Python 3.12 and ships as `harness-sd` (long) / `hssd` (short).
 
 ## Install (run `hssd` in your terminal)
 Requires Python 3.12. From the `harness-studio/` folder:
@@ -14,10 +14,10 @@ Entry points install both `hssd` (short) and `harness-sd` (long). Verified: the 
 `hssd` on PATH and the data dirs (agents/skills/templates/scaffolds) resolve via the editable install.
 A fully-bundled wheel (package data via importlib.resources) is the productization step.
 
-## Run without installing (skeleton)
+## Run without installing
 ```bash
 python3 cli/hssd.py template list
-python3 cli/hssd.py new ../my-project --template=backend-fastapi-sqlite
+python3 cli/hssd.py new ../my-project
 python3 cli/hssd.py new ../x --from=git@github.com:hssd/hssd-sample-react-vite-spa.git
 (cd ../my-project && python3 /path/to/cli/hssd.py log)
 ```
@@ -37,10 +37,12 @@ scoped skills (`ROLE_SKILLS`) + the task, then hands it to the AI runtime:
 - `HSSD_AGENT_BACKEND=mock` (+ `HSSD_MOCK_OUTPUT`) → deterministic, for tests.
 
 ## Status
-- **Implemented & verified:** `new`, `work add/list/show/claim` (atomic claim),
-  `overview add`, `overview analyze --split-concerns` (→ work items + tech/template recommendation),
-  `template import` (additive merge), **`engage`** (the 6-phase loop with the P4 goal-condition
-  loop-until-dry + human gates + durable state in `.harness/engagements/<id>/`), `log`.
-- **Next:** `pm add` (sync adapters), `vscode setup`, `update`, and the `janitor` loop.
+- **Implemented & verified:** `new`, `init`, `sync`, `status` (state machine), `work add/list/show/claim/done`
+  (atomic claim), `overview add/architect/analyze/split`, `architecture approve/status/reopen`,
+  `sprint plan/status/review/close`, `template list/import/add/rm` (additive merge), **`engage`** (the
+  6-phase loop with enforced P3a Red → P3b Green TDD, the 5-checker P4 loop-until-dry, human gates,
+  durable state in `.harness/engagements/<id>/`, and `--max-calls`/`--budget` ceilings), `reset`,
+  `janitor` (dedup by fingerprint), `update`, `log`, `stats`, `ailog`.
+- **Next:** `pm add` (sync adapters), `vscode setup`, native Claude-Code subagent backend, runtime-execution gate.
 - **Engage testing:** `HSSD_AGENT_BACKEND=mock HSSD_MOCK_FILE=<role→output.json> hssd engage <id> --auto`.
 - **Decision (ratifiable):** Python (stdlib) for zero-dep portability and easy testing.

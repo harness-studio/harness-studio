@@ -162,8 +162,8 @@ harness-studio/
   TEMPLATES.md              # templates-as-repos + composition/merge
   CLI.md                    # full CLI reference
   00–04 + VALUE-RISK-ROI    # operating manual, roles, process, deliverables, kickoff, ROI
-  agents/                   # the team — 13 subagents (specialists + adversaries)
-  skills/                   # python, fastapi, typescript + SKILL-AUTHORING
+  agents/                   # the team — 15 subagents (specialists, adversaries + the janitor)
+  skills/                   # python, fastapi, typescript + 6 blessed engineering guards + SKILL-AUTHORING
   templates/                # ADR, AI log, stories/AC, Definition of Done (doc templates)
   workflows/                # engagement.yaml, janitor.yaml (reference SOP encoding — the CLI runs the loop)
   examples/                 # illustrative example engagements (NOT the framework — outputs of it)

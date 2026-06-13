@@ -9,7 +9,6 @@ dist/
 # Node
 node_modules/
 # Harness runtime / local state (never committed)
-.harness/
 # OS / editor
 .DS_Store
 Thumbs.db
