@@ -8,6 +8,107 @@ description: Load when designing, building, or reviewing APIs — versioning, au
 
 An API is a contract. Once published, breaking it has a cost paid by callers. Design for clarity, predictability, and evolvability — not for the implementation's convenience. The client's experience is the product.
 
+## REST vs RESTful — know the difference
+
+**REST** (Representational State Transfer) is an architectural style: stateless, client-server, cacheable, layered system, uniform interface.
+
+**RESTful** is implementing REST properly:
+- Resources are nouns, not verbs: `GET /users/{id}` not `GET /getUser`
+- HTTP verbs carry meaning: `GET` reads, `POST` creates, `PUT` replaces, `PATCH` updates, `DELETE` removes
+- State lives on the server or in the resource representation, not in the URL
+- Collections are plural nouns: `/users`, `/orders`, `/products`
+
+**Common violations (detect and fix):**
+| Violation | Fix |
+|---|---|
+| `POST /getUser` | `GET /users/{id}` |
+| `POST /createOrder` | `POST /orders` |
+| `POST /deleteItem` | `DELETE /items/{id}` |
+| `GET /users?action=delete&id=5` | `DELETE /users/5` |
+| Mixed singular/plural (`/user` and `/products`) | Pick plural, apply consistently |
+
+## OpenAPI specification — mandatory
+
+Every API must have a machine-readable OpenAPI specification (`openapi.yaml` or `openapi.json`). It is not optional documentation — it is the contract.
+
+**FastAPI**: generates the spec automatically at `/openapi.json`. Always verify it matches the intent; the auto-generated spec reflects the code, not necessarily what was designed.
+
+**Other frameworks**: use a spec-first approach — write `openapi.yaml` first, generate stubs from it.
+
+**Serve the spec** at a discoverable path: `/openapi.json` (machine) and `/docs` (human via Swagger UI or Redoc).
+
+### Organized schemas — no inline definitions
+
+All reusable types go in `#/components/schemas`. Use `$ref` consistently. Never define the same shape inline in two places.
+
+```yaml
+# WRONG — inline, duplicated
+paths:
+  /users:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  email: {type: string}
+
+# CORRECT — defined once, referenced everywhere
+components:
+  schemas:
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+
+paths:
+  /users/{id}:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+```
+
+### Spectral — the API lint gate
+
+Run Spectral against the OpenAPI spec before declaring done. Zero errors required.
+
+```bash
+npx @stoplight/spectral-cli lint openapi.yaml
+```
+
+Spectral catches: missing descriptions, inconsistent naming, wrong response codes, missing error schemas, security definition gaps, and custom ruleset violations.
+
+**Blessed `.spectral.yaml` base config:**
+```yaml
+extends:
+  - "spectral:oas"
+rules:
+  operation-description: warn
+  operation-operationId: error
+  operation-tags: warn
+  info-contact: warn
+```
+
+Add to `make lint` so it runs as part of the standard lint gate:
+```makefile
+lint:
+	uv run ruff check .
+	npx @stoplight/spectral-cli lint openapi.yaml
+```
+
 ## Conventions
 
 ### 1. Versioning
@@ -87,6 +188,7 @@ Every error response uses the same structure:
 
 ## Anti-patterns to DETECT (and the fix to PROPOSE)
 
+- **RPC-style URLs** (`POST /createUser`, `GET /getOrder`) → propose resource-oriented RESTful paths
 - **API key in query param** → propose `X-API-Key` header
 - **Breaking change without version bump** → propose `/v2/` route or field aliasing
 - **No rate limit on auth endpoint** → propose strict limits (e.g. 5 requests/minute per IP for login)
@@ -95,9 +197,16 @@ Every error response uses the same structure:
 - **`404` on repeat DELETE** → propose `204 No Content` (DELETE is idempotent)
 - **Generic error body** (`{"error": "something went wrong"}`) → propose the structured error convention
 - **`200` for everything, errors in the body** → propose the correct HTTP status code
+- **Inline schema definitions** (same shape defined twice) → propose `$ref` to `#/components/schemas`
+- **Missing OpenAPI spec** → mandatory; generate or write it
+- **Spec not linted with Spectral** → add `spectral lint openapi.yaml` to the lint gate
 
 ## Review checklist
 
+- [ ] All endpoints follow RESTful resource naming (nouns, plural, correct HTTP verbs)
+- [ ] OpenAPI spec exists (`openapi.yaml` / `openapi.json`) and is served at `/openapi.json`
+- [ ] All reusable types are in `#/components/schemas`, referenced via `$ref`
+- [ ] `spectral lint openapi.yaml` passes with zero errors
 - [ ] Breaking changes increment the URL version (`/v2/`)
 - [ ] Auth tokens are in `Authorization` or `X-API-Key` header — never in query params
 - [ ] Every endpoint has documented rate limits; `429` + `Retry-After` returned on limit

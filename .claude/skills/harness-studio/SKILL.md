@@ -33,11 +33,11 @@ Read both files and paste their content into the subagent's prompt under a `## L
 | `definition-skeptic` | _(none — scope/logic, not technical)_ |
 | `story-writer` | _(none — AC writing)_ |
 | `ac-adversary` | _(none)_ |
-| `architect` | `complexity-guard` · `sqlite-concurrency` · `sql-indexing` · `datetime-utc` · `api-conventions` · `api-design` · `resilience` · `push-over-pull` — load ALL relevant to the story's stack |
+| `architect` | `complexity-guard` · `makefile` · `sqlite-concurrency` · `sql-indexing` · `datetime-utc` · `api-conventions` · `api-design` · `resilience` · `push-over-pull` — load ALL relevant to the story's stack |
 | `architecture-adversary` | same as architect (to catch what the architect missed) |
-| `test-author` | `python` or `typescript` (whichever matches the stack) · `sqlite-concurrency` if DB · `api-conventions` if HTTP |
-| `backend-dev` | `python` · `fastapi` (if FastAPI) · `sqlite-concurrency` · `sql-indexing` · `datetime-utc` · `api-conventions` · `resilience` · `complexity-guard` |
-| `frontend-dev` | `typescript` · `complexity-guard` |
+| `test-author` | `python` or `typescript` · `sqlite-concurrency` if DB · `api-conventions` if HTTP · `makefile` |
+| `backend-dev` | `python` · `fastapi` (if FastAPI) · `sqlite-concurrency` · `sql-indexing` · `datetime-utc` · `api-conventions` · `api-design` · `resilience` · `complexity-guard` · `makefile` |
+| `frontend-dev` | `typescript` · `complexity-guard` · `makefile` |
 | `independent-verifier` | `python` or `typescript` (for running tests correctly) |
 | `completion-challenger` | _(none — completeness check)_ |
 | `test-adversary` | `sqlite-concurrency` (for concurrency attack patterns) |

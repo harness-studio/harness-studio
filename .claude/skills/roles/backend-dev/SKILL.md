@@ -25,14 +25,32 @@ Implement the backend slice under the approved spec until the tests pass. "Done"
 
 - Implement the minimum code that makes the tests pass — no extra abstractions, no speculative generalization
 - If an AC requires a database change, follow `sqlite-concurrency` conventions exactly
-- If an AC requires a new endpoint, follow `api-conventions` conventions exactly
-- Linting: `uv run ruff check --fix` before reporting done
+- If an AC requires a new endpoint, follow `api-conventions` + `api-design` conventions exactly
+- If the project defines a Makefile, use `make test`, `make lint` — not the raw commands
+
+## Lint gate — mandatory before declaring done
+
+Run in this order before reporting done:
+
+```bash
+uv run ruff check .           # zero errors required
+uv run ruff format --check .  # zero diffs required
+# if the story adds/changes API endpoints:
+npx @stoplight/spectral-cli lint openapi.yaml   # zero errors required
+uv run pytest --tb=short      # all tests green
+```
+
+Or via Makefile if present: `make lint && make test`
+
+Lint errors caught by a tool cost zero tokens. The same error found by an adversary costs a full LLM round. Run the tool gate first, always.
 
 ## Evidence to report
 
-1. `uv run pytest --tb=short` output showing all tests green
-2. List of files changed (backend only)
-3. Any assumptions made during implementation that weren't in the spec
+1. `uv run ruff check .` output — zero errors
+2. `uv run pytest --tb=short` output — all tests green
+3. `spectral lint openapi.yaml` output — zero errors (only if endpoints changed)
+4. List of files changed (backend only)
+5. Any assumptions made during implementation that weren't in the spec
 
 ## Failure modes
 

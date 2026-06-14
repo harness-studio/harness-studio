@@ -18,7 +18,7 @@ description: Load for any TypeScript/React frontend work — dashboards and web 
 4. **UI: shadcn/ui + Tailwind.** Don't hand-roll components that shadcn provides; don't introduce a second styling system.
 5. **Components:** function components + hooks; typed props; small and single-purpose (atomic). Early returns for loading/empty/error states.
 6. **Data fetching in a dedicated layer** (hooks/services), not inline in components; always render loading + error states.
-7. **Style:** paradigm-consistent, early returns, no dead state. Lint with ESLint.
+7. **Lint + format: Biome** (blessed default for new projects) or ESLint + Prettier (keep if already in the project — no forced migration). See "Lint gate" section.
 
 ## Gotchas & AI failure modes
 
@@ -30,11 +30,41 @@ description: Load for any TypeScript/React frontend work — dashboards and web 
 - **Untyped fetch responses** — `res.json()` as `any` propagates untyped data through the app.
 - **Bare global `JSX.Element`** — removed in `@types/react` v19. Annotate components with `ReactElement` (`import type { ReactElement } from "react"`) or `React.JSX.Element`, never the bare global `JSX.Element`. (Caught live by `tsc` on the scaffold.)
 
-## How "done" is proven (tests)
+## Lint gate — mandatory before declaring done
 
-- **`tsc --noEmit` (strict) passes** + **ESLint clean** = the baseline.
-- The UI acceptance criteria are **demonstrable** (the live list updates, per-item details show, live counts update) — evidence via screenshot/description or a component test.
-- For logic-heavy pieces (e.g., the polling hook), a unit test (Vitest/RTL).
+Lint is a **hard gate**: P3b is not done until the linter passes clean.
+
+**Biome (blessed for new TypeScript projects):**
+```bash
+npx @biomejs/biome check .          # lint + format check — zero errors required
+npx @biomejs/biome check --apply .  # auto-fix safe issues
+```
+
+**ESLint (keep if already in the project):**
+```bash
+npx eslint . --ext .ts,.tsx         # zero errors required
+npx eslint . --ext .ts,.tsx --fix   # auto-fix safe issues
+```
+
+**Biome vs ESLint — the decision:**
+- **Biome**: single binary, replaces ESLint + Prettier, zero config to start, ~100× faster. Blessed for new projects from 2024 onward.
+- **ESLint**: larger plugin ecosystem, required for projects with custom rules or legacy configs. Keep it if the project already uses it.
+- **The rule**: new project → Biome. Existing project with ESLint → keep ESLint, don't migrate mid-engagement.
+
+**`tsc` is always required** regardless of which linter is used:
+```bash
+npx tsc --noEmit   # strict type check — zero errors required
+```
+
+Run in order: `tsc --noEmit` → linter → tests. Type errors and lint errors caught by tools cost zero tokens.
+
+## How "done" is proven
+
+- `npx tsc --noEmit` → zero errors (strict)
+- `npx @biomejs/biome check .` (or `npx eslint .`) → zero errors
+- UI acceptance criteria are **demonstrable** — screenshot or description covers: success state, loading state, error state, empty state
+- For logic-heavy pieces: unit test (Vitest / React Testing Library)
+- Evidence = command output attached. No "should pass".
 
 ## Out of scope (sanctioned paths or absent)
 

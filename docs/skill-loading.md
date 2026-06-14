@@ -88,11 +88,12 @@ invoke.
 | Skill | Why it matters for the architect |
 |---|---|
 | `complexity-guard` | Catches over-abstraction and speculative design before it's proposed |
+| `makefile` | Ensures the project gets a Makefile with standard targets from the start |
 | `sqlite-concurrency` | Ensures the data model proposes correct WAL, transaction modes, ownership |
 | `sql-indexing` | Catches missing indexes at design time, not after performance complaints |
 | `datetime-utc` | Ensures datetime fields are specified as UTC-aware from the start |
 | `api-conventions` | Ensures endpoint contracts follow the blessed response shapes |
-| `api-design` | Ensures versioning, auth placement, idempotency keys are in the design |
+| `api-design` | Ensures versioning, auth placement, idempotency keys, Spectral gate are in the design |
 | `resilience` | Catches missing retry logic, timeout design, circuit breaker needs |
 | `push-over-pull` | Catches polling-where-push-fits at the design stage |
 
@@ -118,9 +119,10 @@ invoke.
 
 | Skill | Why it matters for the test-author |
 |---|---|
-| `python` or `typescript` | Correct runner invocation (`uv run pytest`), test framework conventions |
+| `python` or `typescript` | Correct runner invocation (`uv run pytest` / `npx biome`), test framework conventions |
 | `sqlite-concurrency` | Writes correct stress tests for concurrency ACs (N concurrent → assert invariant) |
 | `api-conventions` | Knows the expected response shapes so assertions target the right fields |
+| `makefile` | Knows to use `make test` if a Makefile exists; verifies the target calls the right runner |
 
 **`backend-dev`**
 - Role skill: `roles/backend-dev` — implement until green, uv only, never declare without evidence
@@ -134,8 +136,10 @@ invoke.
 | `sql-indexing` | Adds indexes the design specified; catches missing ones during implementation |
 | `datetime-utc` | Stores and returns tz-aware UTC datetimes; rejects naive inputs at validation |
 | `api-conventions` | Implements the blessed response shapes, status codes, error bodies |
+| `api-design` | Implements RESTful naming, OpenAPI spec, Spectral lint gate for any new endpoints |
 | `resilience` | Implements retry with backoff, timeout handling, circuit breaker where specified |
 | `complexity-guard` | Prevents scope creep and over-abstraction during implementation |
+| `makefile` | Ensures Makefile exists and `make lint` / `make test` work; uses them as the lint gate |
 
 **`frontend-dev`**
 - Role skill: `roles/frontend-dev` — all three states (loading/error/empty), own only frontend
@@ -143,8 +147,9 @@ invoke.
 
 | Skill | Why it matters for the frontend-dev |
 |---|---|
-| `typescript` | TypeScript conventions, type safety, build tooling |
+| `typescript` | TypeScript conventions, type safety, Biome/ESLint lint gate, `tsc --noEmit` |
 | `complexity-guard` | Prevents component over-abstraction and premature generalization |
+| `makefile` | Ensures `make lint` / `make test` exist and use the correct runners |
 
 ---
 
@@ -207,7 +212,8 @@ invoke.
 | `complexity-guard` | Functions > 50 lines, files > 300 lines, nesting > 3, speculative abstractions |
 | `python` | Wrong environment usage, bare `pytest` calls, missing `uv` wrappers |
 | `fastapi` | Anti-patterns specific to FastAPI services |
-| `typescript` | Anti-patterns specific to TypeScript/frontend code |
+| `typescript` | Anti-patterns specific to TypeScript/frontend code, missing Biome/ESLint gate |
+| `makefile` | Missing Makefile, non-standard targets, hardcoded tool invocations, missing `.PHONY` |
 
 ---
 
@@ -254,11 +260,12 @@ invoke.
     sql-indexing/SKILL.md
     datetime-utc/SKILL.md
     api-conventions/SKILL.md
-    api-design/SKILL.md
+    api-design/SKILL.md            ← REST/RESTful, OpenAPI, Spectral, versioning
     resilience/SKILL.md
     push-over-pull/SKILL.md
     complexity-guard/SKILL.md
-    python/SKILL.md
+    makefile/SKILL.md              ← universal command interface (uv, npm, etc.)
+    python/SKILL.md                ← ruff lint gate (hard)
     fastapi/SKILL.md
-    typescript/SKILL.md
+    typescript/SKILL.md            ← Biome/ESLint lint gate (hard), tsc --noEmit
 ```

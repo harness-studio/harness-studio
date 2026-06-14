@@ -34,7 +34,7 @@ Bare `python` / `pip` / `pytest` use whatever interpreter happens to be on `PATH
 5. **Async for IO.** IO-bound code is `async`; don't block the event loop with sync IO. CPU-bound work goes to a worker/threadpool, never inline in an async path.
 6. **Style:** early returns / guard clauses (no deep nesting); small single-purpose functions (atomic programming); **paradigm lock** — pick OO or functional per module and stay consistent.
 7. **Errors:** narrow exceptions; never a bare `except:`; raise domain errors, handle at the edge.
-8. **Lint/format: `ruff`** (both). Code must be ruff-clean.
+8. **Lint/format: `ruff`** (both). Code must be ruff-clean. This is a **hard gate** — see "Lint gate" section.
 9. **Settings: `pydantic-settings`**, never scattered `os.getenv`.
 
 ## Gotchas & AI failure modes
@@ -47,11 +47,36 @@ Bare `python` / `pip` / `pytest` use whatever interpreter happens to be on `PATH
 - **`pip`/venv drift** instead of `uv` — breaks reproducibility.
 - **Tests written after** (or asserting trivially) — violates TDD; the AC Adversary/Verifier checks the test actually fails on broken code.
 
-## How "done" is proven (tests)
+## Lint gate — mandatory before declaring done
 
-- **TDD:** a failing `pytest` first, then code (exception: notebooks).
-- `pytest` green + **`ruff check` clean** + type check passes = the minimum bar.
-- Evidence = the command output. No "should pass".
+Lint is not optional polish. It is a **hard gate**: P3b is not green until both commands pass clean.
+
+```bash
+uv run ruff check .          # lint — zero errors required
+uv run ruff format --check . # format — zero diffs required
+```
+
+Run lint BEFORE running tests. Lint errors caught by a tool cost zero tokens; the same error found by an adversary costs a full LLM round. Fix the tool gate first.
+
+`ruff check --fix` auto-corrects safe issues. `ruff format` formats in place. After auto-fix, re-run the check forms to confirm clean.
+
+**Ruff config** belongs in `pyproject.toml`:
+```toml
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# E/F = pycodestyle/pyflakes, I = isort, UP = pyupgrade, B = bugbear, SIM = simplify
+```
+
+## How "done" is proven
+
+- `uv run ruff check .` → zero errors
+- `uv run ruff format --check .` → zero diffs
+- `uv run pytest --tb=short` → all tests pass
+- Evidence = command output attached. No "should pass".
 
 ## Out of scope (sanctioned paths or absent)
 

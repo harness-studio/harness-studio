@@ -29,11 +29,26 @@ empty    → explicit empty state (never a blank screen)
 success  → the happy path
 ```
 
+## Lint gate — mandatory before declaring done
+
+Run in this order before reporting done:
+
+```bash
+npx tsc --noEmit                    # zero type errors required
+npx @biomejs/biome check .          # zero lint/format errors required (or eslint if project uses it)
+```
+
+Or via Makefile if present: `make lint`
+
+Type errors and lint errors caught by tools cost zero tokens. Run the gate before declaring done.
+
 ## Evidence to report
 
-1. Description of each UI AC and how it is satisfied
-2. Screenshot or description of: the happy path, the error state, the empty state
-3. Any assumptions made about the API contract or design spec
+1. `npx tsc --noEmit` output — zero errors
+2. Linter output (`biome check` or `eslint`) — zero errors
+3. Description of each UI AC and how it is satisfied
+4. Screenshot or description of: the happy path, the error state, the empty state
+5. Any assumptions made about the API contract or design spec
 
 ## Failure modes
 
