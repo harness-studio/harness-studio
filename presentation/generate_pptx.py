@@ -580,10 +580,54 @@ code(s, 0.6, 5.3, 12.1, 1.4,
      "  hssd status                                 # see everything in flight")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SLIDE 14 — CLOSING / PRINCIPLES
+# SLIDE 14 — THREE LAYERS OF ROLE QUALITY
 # ─────────────────────────────────────────────────────────────────────────────
 s = new_slide()
-slide_number(s, 14)
+slide_number(s, 14, total=15)
+label(s, 0.6, 0.4, "13 / SKILL COMPOSITION")
+box(s, 0.6, 0.8, 11, 0.7, "Three layers of role quality.", size=24, bold=True)
+hline(s, 1.7)
+
+layers = [
+    ("LAYER 1", "Agent card", ".claude/agents/<name>.md",
+     "Defines WHAT the role IS — identity, scope, output type, reward signal."),
+    ("LAYER 2", "Role skill", ".claude/skills/roles/<name>/SKILL.md",
+     "Defines HOW the role EXECUTES — non-negotiables, exact output format, failure modes, loop discipline."),
+    ("LAYER 3", "Engineering skills", ".claude/skills/<name>/SKILL.md",
+     "Defines WHAT the role must CATCH — domain knowledge: concurrency, indexing, UTC, APIs, complexity."),
+]
+top = 1.9
+for tag, title, path, desc in layers:
+    box(s, 0.6, top, 1.1, 0.32, tag, size=11, color=ORANGE, bold=True)
+    box(s, 1.8, top, 2.5, 0.32, title, size=13, color=WHITE, bold=True)
+    box(s, 4.4, top, 4.2, 0.32, path, size=10, color=GREEN)
+    box(s, 0.6, top + 0.35, 12.6, 0.32, desc, size=12, color=MUTED)
+    top += 0.95
+
+hline(s, top + 0.05)
+box(s, 0.6, top + 0.2, 12.6, 0.32,
+    "Composition rule: every subagent prompt = role skill + relevant engineering skills + task description.",
+    size=13, color=BLUE, bold=False)
+
+top2 = top + 0.65
+rows = [
+    ("architect / architecture-adversary", "complexity-guard · sqlite-concurrency · sql-indexing · datetime-utc · api-conventions · api-design · resilience · push-over-pull"),
+    ("backend-dev",                        "python · fastapi · sqlite-concurrency · sql-indexing · datetime-utc · api-conventions · resilience · complexity-guard"),
+    ("test-author",                        "python / typescript · sqlite-concurrency · api-conventions"),
+    ("security-adversary",                 "api-conventions · api-design"),
+    ("janitor",                            "ALL engineering skills — scans for violations of every convention"),
+    ("intake / AC / completion roles",     "(none — problem framing and completeness checking, not technical domain)"),
+]
+for role, skills in rows:
+    box(s, 0.6,  top2, 3.8, 0.32, role,   size=11, color=ORANGE, bold=False)
+    box(s, 4.55, top2, 8.8, 0.32, skills, size=11, color=MUTED,  bold=False)
+    top2 += 0.42
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 15 — CLOSING / PRINCIPLES
+# ─────────────────────────────────────────────────────────────────────────────
+s = new_slide()
+slide_number(s, 15, total=15)
 box(s, 0.6, 0.5, 12, 0.5, "// THE BET", size=13, color=MUTED)
 multiline_box(s, 0.6, 1.1, 10, 1.5, [
     ("Stop hoping the AI got it right.", 36, WHITE, True),

@@ -282,7 +282,39 @@ hssd status                  # see everything in flight
 
 ---
 
-<!-- SLIDE 14 — PRINCIPLES -->
+<!-- SLIDE 14 — SKILL COMPOSITION -->
+# Three layers of role quality
+
+A role card alone answers "what should I do?" — not "how should I do it well?" or "what must I catch?"
+
+```
+LAYER 1 — Agent card   (.claude/agents/<name>.md)
+  Defines WHAT the role IS
+  Identity, scope, output type, reward signal
+
+LAYER 2 — Role skill   (.claude/skills/roles/<name>/SKILL.md)
+  Defines HOW the role EXECUTES
+  Non-negotiables · exact output format · failure modes · loop discipline
+
+LAYER 3 — Engineering skills   (.claude/skills/<name>/SKILL.md)
+  Defines WHAT the role must CATCH
+  Domain knowledge: concurrency, indexing, UTC, APIs, complexity
+```
+
+**The composition rule:** every subagent prompt = role skill + relevant engineering skills + task.
+
+| Role | Engineering skills loaded |
+|---|---|
+| `architect` / `architecture-adversary` | ALL stack skills + `complexity-guard` |
+| `backend-dev` | python · fastapi · sqlite · sql-indexing · datetime-utc · api-conventions · resilience · complexity-guard |
+| `test-author` | python/typescript · sqlite-concurrency · api-conventions |
+| `security-adversary` | api-conventions · api-design |
+| `janitor` | **ALL** engineering skills |
+| intake/AC roles | _(none — problem framing, not technical)_ |
+
+---
+
+<!-- SLIDE 15 — PRINCIPLES -->
 # Five principles
 
 **Evidence over assertion.**
