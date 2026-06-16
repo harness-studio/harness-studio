@@ -111,18 +111,18 @@ Claim first: `hssd work claim <id>`. Write each phase's output to `.harness/enga
 **Always compose the subagent prompt with: role skill + relevant engineering skills.**
 
 - **P0 Intake** — **product-analyst** _(role skill + no eng skills)_ → **definition-skeptic** _(role skill)_ (gate). BLOCK → take `recommended`, record in `assumptions.md`, re-run. Cap 3 rounds → Spec Lock.
-- **P1 Stories & AC** — **story-writer** _(role skill)_ → **ac-adversary** _(role skill)_ (gate). AC are the contract; they become the tests.
+- **P1 Stories & AC** — **story-writer** _(role skill)_ → **ac-adversary** _(role skill)_ (gate). AC are the contract; they become the tests. For each AC the story-writer must resolve the verification mechanism before closing: **code → TDD**, **SQL → validation script**, **YAML/config → linter or validation script**, **no automated path exists → human gate** (mark explicitly in the AC).
 - **P2 Architecture** — **architect** _(role skill + complexity-guard + all stack skills)_ → **architecture-adversary** _(role skill + same stack skills)_ (gate). Inherits locked ADR — never re-litigate the data model.
 - **◆ SPEC LOCK (human gate)** — summarize locked spec + accumulated assumptions, ask the user to approve. **No code before this.**
 - **P3a Red** — **test-author** _(role skill + python/typescript + sqlite-concurrency if DB)_ writes tests from locked AC. Run `uv run pytest` yourself — they MUST fail. Save to `tests-red.log`. Vacuous test (passes before implementation) → send back.
 - **P3b Green** — **backend-dev** _(role skill + full stack skills)_ / **frontend-dev** _(role skill + typescript + complexity-guard)_ implement until green. Run `uv run pytest`, save `tests-green.log`. Loop until green.
 - **P4 Verify (loop-until-dry)** — run all five adversaries, each with role skill + relevant engineering skills:
   - **security-adversary** _(api-conventions + api-design)_ — mandatory for any API/auth surface
-  - **independent-verifier** — every AC ↔ test
+  - **independent-verifier** — every AC ↔ test; for ACs marked **human gate**, pause and ask the user to run the check manually before proceeding
   - **completion-challenger** — proves NOT done
   - **test-adversary** _(sqlite-concurrency)_ — real races, vacuous tests
   - **regression-hunter** — full suite + all callers
-  - Any BLOCK → back to P3b, fix, re-attack. Done = green AND all adversaries pass.
+  - Any BLOCK → back to P3b, fix, re-attack. Done = green AND all adversaries pass AND all human-gate ACs confirmed by the user.
 - **◆ MERGE (human gate)** — show evidence (green log + all adversary verdicts), ask the user to approve. Then `hssd work done <id>`.
 
 ---

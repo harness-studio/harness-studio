@@ -15,8 +15,14 @@ Convert concerns into stories with measurable, testable acceptance criteria. Eve
 - Honor the Acceptance mode: TESTS → deterministic automated tests; RUBRIC → reviewer-checkable checklist with objective presence checks
 - Each story must be independently buildable and verifiable (no hidden inter-story dependencies)
 
+**For every AC, resolve the verification mechanism before closing:**
+- Code → TDD (test-author writes failing test first)
+- SQL → validation script (run query, assert output)
+- YAML / config / infra → linter or validation script; if none exists, mark as **[human gate]**
+- No automated path → mark as **[human gate]** explicitly; never leave it implicit
+
 **Never:**
-- Write AC that can't become a test or a rubric check — an untestable AC is invalid
+- Write AC that can't become a test, a script, or a human-gate check — an untestable AC with no mechanism is invalid
 - Write AC that only covers the happy path when error/edge cases exist
 - Write vague AC ("should be fast", "should look good", "should handle errors gracefully")
 - Force test-based AC when the Acceptance mode is RUBRIC
