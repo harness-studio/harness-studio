@@ -1,13 +1,13 @@
 # AI Interaction Log
 
-> **Interactions**, **Corrections**, and **Reflection** are human-authored. Run `hssd ailog` to
-> (re)generate the **Summary** and the **Appendix** (harness agent calls) from
-> `.harness/logs/metrics.jsonl`; your human sections are preserved across re-runs. Capture LIVE —
-> don't reconstruct at the end.
+> **Interactions**, **Corrections**, and **Reflection** are human-authored (preserved across re-runs). `hssd ailog` regenerates **Summary** and the **Appendix** (harness agent calls) from `.harness/logs/metrics.jsonl`.
 
 ## Summary
 
-_(auto — run `hssd ailog`)_
+- Harness AI calls: **0**
+- Agent wall time: **0.0s**
+- Tokens in/out: **0 / 0** (cache-read 0)
+- Cost: **$0.0000**
 
 ## Interactions
 
@@ -48,4 +48,8 @@ _(auto — run `hssd ailog`)_
 
 ## Appendix — Harness agent calls (auto from metrics.jsonl)
 
-_(auto — run `hssd ailog`)_
+Harness-internal governance/agent calls — **not** part of the Interactions count above.
+
+| Role | Calls | Tokens in | Tokens out | Cost |
+|---|--:|--:|--:|--:|
+| _(none yet)_ | | | | |

@@ -209,7 +209,21 @@ CLAUDE_SETTINGS_LOCAL = json.dumps({
             "Read(.env)", "Read(.env.*)", "Read(**/.env)",
             "Write(.env)", "Write(.env.*)", "Write(.git/**)",
         ],
-    }
+    },
+    "hooks": {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "hssd ailog 2>/dev/null || true",
+                        "timeout": 30,
+                        "statusMessage": "Updating AI log...",
+                    }
+                ]
+            }
+        ]
+    },
 }, indent=2)
 
 
@@ -705,10 +719,20 @@ def _deep_merge(base: object, incoming: object, conflicts: list[str], path: str)
     return base
 
 
+def _strip_jsonc(text: str) -> str:
+    """Strip // line-comments and trailing commas so JSONC files parse as JSON."""
+    import re
+    # remove // comments (not inside strings)
+    text = re.sub(r'("(?:[^"\\]|\\.)*")|//[^\n]*', lambda m: m.group(1) or "", text)
+    # remove trailing commas before ] or }
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return text
+
+
 def _merge_json(target: Path, incoming_text: str, conflicts: list[str]) -> None:
-    incoming = json.loads(incoming_text)
+    incoming = json.loads(_strip_jsonc(incoming_text))
     merged = (
-        _deep_merge(json.loads(target.read_text(encoding="utf-8")), incoming, conflicts, target.name)
+        _deep_merge(json.loads(_strip_jsonc(target.read_text(encoding="utf-8"))), incoming, conflicts, target.name)
         if target.exists()
         else incoming
     )
