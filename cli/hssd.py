@@ -33,7 +33,7 @@ try:
 except Exception:
     __version__ = "0.2.0a1"
 
-PKG_ROOT = Path(__file__).resolve().parent.parent  # the harness-studio package
+PKG_ROOT = Path(__file__).resolve().parent  # assets live alongside this file (bundled or editable)
 TEMPLATES = PKG_ROOT / "templates"
 AGENTS = PKG_ROOT / "agents"
 
@@ -465,16 +465,39 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not (dest / ".git").exists():
         print("  note: no git repo here — branch/claim features need git (run: git init -b main)")
     size = _detect_project_size(dest)
-    if size == "blank":
+    pm_path = dest / ".harness" / "project.md"
+    if size == "substantial" and not pm_path.exists():
+        print("  detected: existing project with source files / manifests")
+        print("  reading codebase to draft .harness/project.md …")
+        snapshot = _scan_codebase(dest)
+        prompt = (
+            "You are reading an existing codebase. Produce a concise project identity document "
+            "for .harness/project.md with these sections:\n\n"
+            "## Project name & one-line description\n"
+            "## What it does — the 3-5 core capabilities, inferred from the code\n"
+            "## Stack — languages, frameworks, persistence, infra (as detected)\n"
+            "## Non-goals — what it explicitly does NOT do, inferred from scope\n"
+            "## Guiding principles — any conventions or constraints visible in the code\n\n"
+            "Be concrete and grounded in what you see. Do NOT invent capabilities. "
+            "Output ONLY the Markdown document, no prose before or after.\n\n"
+            + snapshot
+        )
+        draft = _run_role("architect", prompt)
+        draft = _strip_to_heading(draft)
+        pm_path.write_text(draft, encoding="utf-8")
+        _log(dest, "init", "project.md drafted from codebase")
+        print("  ✓ .harness/project.md drafted — review it, then:")
+        print("        hssd project approve")
+        print("        hssd overview architect  →  hssd architecture approve")
+    elif size == "blank":
         print("  next: write .harness/project.md (vision, objectives, non-goals)")
         print("        then: hssd project approve")
-    elif size == "substantial":
-        print("  detected: existing project with source files / manifests")
-        print("  next: review or create .harness/project.md — the AI can read your codebase and propose it")
-        print("        then: hssd project approve")
+        print("        then: hssd overview architect  →  hssd architecture approve")
     else:
-        print("  next: write .harness/project.md  (or describe your project so the AI can draft it)")
+        if not pm_path.exists():
+            print("  next: write .harness/project.md  (or describe your project)")
         print("        then: hssd project approve")
+        print("        then: hssd overview architect  →  hssd architecture approve")
     return 0
 
 
@@ -511,8 +534,81 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scan_codebase(project: Path, max_chars: int = 12_000) -> str:
+    """Return a compact codebase snapshot for grounding AI roles in legacy projects.
+
+    Collects: directory tree (depth ≤ 3, skipping noise), manifest files verbatim, and a sample
+    of source file headers. Capped at max_chars to keep prompts within reason.
+    """
+    sig_exts = {".py", ".ts", ".js", ".go", ".java", ".rb", ".cs", ".rs", ".tsx", ".jsx",
+                ".vue", ".svelte", ".kt", ".scala", ".swift"}
+    manifest_names = {"pyproject.toml", "package.json", "go.mod", "pom.xml", "Cargo.toml",
+                      "requirements.txt", "Gemfile", "composer.json", "build.gradle",
+                      "Makefile", "docker-compose.yml", "docker-compose.yaml", "Dockerfile"}
+    noise_dirs = {".git", ".harness", "node_modules", "__pycache__", ".venv", "venv",
+                  ".mypy_cache", ".pytest_cache", "dist", "build", ".next", ".nuxt"}
+
+    parts: list[str] = []
+    used = 0
+
+    # 1. Directory tree (depth ≤ 3)
+    tree_lines: list[str] = []
+    for p in sorted(project.rglob("*")):
+        rel = p.relative_to(project)
+        parts_rel = rel.parts
+        if any(d in noise_dirs or d.startswith(".") for d in parts_rel):
+            continue
+        if len(parts_rel) > 3:
+            continue
+        indent = "  " * (len(parts_rel) - 1)
+        suffix = "/" if p.is_dir() else ""
+        tree_lines.append(f"{indent}{p.name}{suffix}")
+    tree_txt = "## Directory tree\n```\n" + "\n".join(tree_lines[:120]) + "\n```\n"
+    parts.append(tree_txt)
+    used += len(tree_txt)
+
+    # 2. Manifests verbatim (capped individually)
+    for f in sorted(project.rglob("*")):
+        if used >= max_chars:
+            break
+        rel = f.relative_to(project)
+        if any(d in noise_dirs or d.startswith(".") for d in rel.parts):
+            continue
+        if f.name in manifest_names and f.is_file():
+            try:
+                body = f.read_text(encoding="utf-8", errors="replace")[:2000]
+                chunk = f"\n## {rel}\n```\n{body}\n```\n"
+                parts.append(chunk)
+                used += len(chunk)
+            except OSError:
+                pass
+
+    # 3. Source file headers (first 40 lines each, up to budget)
+    source_files = []
+    for f in sorted(project.rglob("*")):
+        rel = f.relative_to(project)
+        if any(d in noise_dirs or d.startswith(".") for d in rel.parts):
+            continue
+        if f.suffix in sig_exts and f.is_file():
+            source_files.append(f)
+
+    for f in source_files[:40]:
+        if used >= max_chars:
+            break
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
+            rel = f.relative_to(project)
+            chunk = f"\n## {rel} (first {len(lines)} lines)\n```\n" + "\n".join(lines) + "\n```\n"
+            parts.append(chunk)
+            used += len(chunk)
+        except OSError:
+            pass
+
+    return "\n".join(parts)
+
+
 def cmd_project(args: argparse.Namespace) -> int:
-    """Human gate: approve project.md → transitions project to 'identified'."""
+    """Manage project identity: draft (AI-generated from codebase), show, check, approve."""
     project = Path(".").resolve()
     pm_path = project / ".harness" / "project.md"
     lock = project / ".harness" / "locks" / "project.json"
@@ -521,7 +617,7 @@ def cmd_project(args: argparse.Namespace) -> int:
         if pm_path.exists():
             print(pm_path.read_text(encoding="utf-8"))
         else:
-            print("No project.md yet. Create it at .harness/project.md, then run: hssd project approve")
+            print("No project.md yet. Run `hssd init` (auto-drafts from codebase) or write it manually.")
         return 0
 
     if args.action == "check":
@@ -535,7 +631,7 @@ def cmd_project(args: argparse.Namespace) -> int:
     # approve
     if not pm_path.exists():
         print("BLOCK: .harness/project.md does not exist.\n"
-              "  Create it with vision, objectives, non-goals, and principles.\n"
+              "  Run `hssd init` to auto-draft it from the codebase, or write it manually.\n"
               "  Then run: hssd project approve", file=sys.stderr)
         return 1
     body = pm_path.read_text(encoding="utf-8").strip()
@@ -1937,24 +2033,49 @@ def cmd_overview(args: argparse.Namespace) -> int:
     # architect: propose the SHARED project architecture (the contract every story inherits).
     # The system drafts; the engineer iterates and owns docs/ADR.md; the adversary only advises.
     if args.action == "architect":
-        if not ov.exists():
-            print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
-            return 1
-        brief = ov.read_text(encoding="utf-8")
+        from_codebase = getattr(args, "from_codebase", False)
+        # Legacy mode: no overview.md present, but an existing codebase → reverse-engineer the ADR.
+        if not ov.exists() or from_codebase:
+            size = _detect_project_size(project)
+            if size == "blank" and not from_codebase:
+                print("BLOCK: no overview yet. Run 'hssd overview add <file>' first.", file=sys.stderr)
+                return 1
+            print("No overview.md found — reading the codebase to propose the ADR (legacy mode).")
+            snapshot = _scan_codebase(project)
+            pm_path = project / ".harness" / "project.md"
+            pm_ctx = ("\n\n## Project identity (.harness/project.md)\n"
+                      + pm_path.read_text(encoding="utf-8")) if pm_path.exists() else ""
+            brief = (
+                "SOURCE: existing codebase (reverse-engineering the real architecture).\n"
+                "Do NOT invent capabilities. Only document what is already implemented.\n"
+                + pm_ctx + "\n\n" + snapshot
+            )
+        else:
+            brief = ov.read_text(encoding="utf-8")
+
         # Architecture is a function of the PROBLEM, not of the decomposition — the architect stands
         # on the brief alone (it runs BEFORE analyze/split, which then inherit the locked ADR).
-        draft = _run_role(
-            "architect",
+        is_legacy = not ov.exists() or from_codebase
+        adr_prompt = (
+            "Reverse-engineer the SHARED architecture of this EXISTING project into an ADR — "
+            "document what IS, not what should be. Output ONLY a 1-page Architecture Decision "
+            "Record in Markdown with these sections:\n"
+            if is_legacy else
             "Design the SHARED architecture for this WHOLE project from the brief — the project-level "
             "contract every story will inherit, not one story's design. Output ONLY a 1-page "
             "Architecture Decision Record in Markdown with these sections:\n"
-            "## Data model — every entity/table, its fields, AND ownership (which story/migration "
-            "creates it, and who writes each mutable column — make cross-story ownership explicit).\n"
-            "## Stack tier — lightweight (FastAPI+SQLite) or full (FastAPI+Postgres); justify.\n"
+        )
+        draft = _run_role(
+            "architect",
+            adr_prompt
+            + "## Data model — every entity/table, its fields, AND ownership (which component "
+            "creates it, and who writes each mutable column — make cross-component ownership explicit).\n"
+            "## Stack tier — the actual stack (languages, frameworks, persistence); justify each choice "
+            "as observed in the code.\n"
             "## Concurrency & isolation — the strategy for each stated guarantee (atomic counter, "
             "BEGIN IMMEDIATE / SELECT FOR UPDATE, idempotency key).\n"
             "## Key decisions — the 2-3 most important, each with why + the rejected alternative.\n"
-            "## Assumptions — everything the brief leaves open, each stated as a decision.\n"
+            "## Assumptions — everything left open or undocumented, each stated as a decision.\n"
             f"\n{brief}",
         )
         docs = project / "docs"
@@ -2077,8 +2198,9 @@ def cmd_update(args: argparse.Namespace) -> int:
         print(f"harness-studio {version}")
         return 0
     if not (PKG_ROOT / ".git").exists():
-        print(f"harness-studio {version} — not a git checkout here; nothing to pull.", file=sys.stderr)
-        return 1
+        print(f"harness-studio {version} — installed as a package; re-run the install command to upgrade:", file=sys.stderr)
+        print("  uv tool install --reinstall git+https://github.com/harness-studio/harness-studio", file=sys.stderr)
+        return 0
     res = subprocess.run(
         ["git", "-C", str(PKG_ROOT), "pull", "--ff-only"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
@@ -2529,6 +2651,9 @@ def main(argv: list[str] | None = None) -> int:
     po.add_argument("file", nargs="?")
     po.add_argument("--split-concerns", action="store_true",
                     help="one-shot: analyze AND create the work items (skips the review gate)")
+    po.add_argument("--from-codebase", dest="from_codebase", action="store_true",
+                    help="architect mode: reverse-engineer the ADR from the existing codebase "
+                         "(legacy projects; auto-detected when no overview.md is present)")
     po.set_defaults(func=cmd_overview)
 
     pst = sub.add_parser("status", help="show the project state machine + the next command to run")

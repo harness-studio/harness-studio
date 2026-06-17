@@ -20,6 +20,15 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["cli"]
 
+[tool.setuptools.package-data]
+cli = [
+    "agents/**/*",
+    "skills/**/*",
+    "templates/**/*",
+    "commands/**/*",
+    "VERSION",
+]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
@@ -27,7 +36,3 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.17",
 ]
-
-# NOTE: the data dirs (agents/, skills/, templates/, scaffolds/, workflows/) resolve from the repo
-# in an EDITABLE install (the CLI finds them relative to its own file). Bundling them into a wheel
-# as package data (importlib.resources) is the productization step.

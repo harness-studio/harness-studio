@@ -31,20 +31,32 @@ Both share one root: letting *the maker grade its own work*. Harness Studio fixe
 
 Requires **Python 3.12**.
 
+**From GitHub (no clone needed):**
+
 ```bash
-# install straight from GitHub (no clone needed)
 uv tool install git+https://github.com/harness-studio/harness-studio
 hssd --help
 ```
 
-Or, to hack on the framework itself, clone and install editable:
+To upgrade later:
 
 ```bash
-# from the repo root
+uv tool install --reinstall git+https://github.com/harness-studio/harness-studio
+```
+
+> Git LFS assets (presentation slides, cover images) are skipped automatically — the CLI doesn't
+> need them. If you see LFS pointer warnings during install, prefix the command with
+> `GIT_LFS_SKIP_SMUDGE=1`.
+
+**Editable install (to hack on the framework itself):**
+
+```bash
+git clone https://github.com/harness-studio/harness-studio
+cd harness-studio
 uv tool install --editable .      # or: pipx install -e .
 ```
 
-This puts `hssd` (short) and `harness-sd` (long) on your PATH.
+Both forms put `hssd` (short) and `harness-sd` (long) on your PATH.
 
 ## Quickstart — the whole flow
 
