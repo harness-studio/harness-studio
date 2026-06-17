@@ -1,1 +1,6 @@
 2026-06-13T17:42:49.309491+00:00	init	created=4 skipped=0 claude(+32/=0)
+2026-06-13T23:11:21.589531+00:00	project approve	project.md locked
+2026-06-13T23:11:25.060728+00:00	intake add	INT-20260613-1397 CLI redesign — intake/iteration/project commands
+2026-06-13T23:11:30.352084+00:00	iteration plan	ITER-20260613-1015 implement hssd intake + iteration + project commands
+2026-06-13T23:11:30.665458+00:00	iteration activate	0 iterations: 
+2026-06-13T23:11:34.816791+00:00	iteration activate	1 iterations: ITER-20260613-1015
