@@ -34,19 +34,17 @@ Requires **Python 3.12**.
 **From GitHub (no clone needed):**
 
 ```bash
-uv tool install git+https://github.com/harness-studio/harness-studio
+GIT_LFS_SKIP_SMUDGE=1 uv tool install git+https://github.com/harness-studio/harness-studio
 hssd --help
 ```
+
+`GIT_LFS_SKIP_SMUDGE=1` skips downloading binary assets (presentation slides, cover images) that the CLI doesn't need. Without it, git-lfs will try to fetch them and may fail or slow down the install.
 
 To upgrade later:
 
 ```bash
-uv tool install --reinstall git+https://github.com/harness-studio/harness-studio
+GIT_LFS_SKIP_SMUDGE=1 uv tool install --reinstall git+https://github.com/harness-studio/harness-studio
 ```
-
-> Git LFS assets (presentation slides, cover images) are skipped automatically — the CLI doesn't
-> need them. If you see LFS pointer warnings during install, prefix the command with
-> `GIT_LFS_SKIP_SMUDGE=1`.
 
 **Editable install (to hack on the framework itself):**
 
